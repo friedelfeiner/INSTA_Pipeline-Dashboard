@@ -1,0 +1,846 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>INSTA Pipeline · Dashboard</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  html, body { margin: 0; padding: 0; background: #FBFAFC; font-family: 'Geist', ui-sans-serif, system-ui, sans-serif; height: 100%; }
+  * { box-sizing: border-box; }
+  #root { height: 100vh; display: flex; flex-direction: column; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+
+<script type="text/babel">
+const { useState } = React;
+
+// ─── Design tokens ────────────────────────────────────────────────────────────
+const T = {
+  bg:          '#FBFAFC',
+  surface:     '#FFFFFF',
+  surfaceAlt:  '#F6F3FB',
+  border:      '#ECE6F4',
+  ink:         '#14101C',
+  muted:       '#6E6780',
+  mutedSoft:   '#9990A8',
+  accent:      '#7C3AED',
+  accentDeep:  '#5B21B6',
+  accentSoft:  '#F0E8FF',
+  accentInk:   '#4C1D95',
+  ok:          '#15803D',
+  okSoft:      '#DCFCE7',
+  warn:        '#B45309',
+  warnSoft:    '#FEF3C7',
+  err:         '#B91C1C',
+  errSoft:     '#FEE2E2',
+  sans:        "'Geist', ui-sans-serif, sans-serif",
+  serif:       "'Instrument Serif', Georgia, serif",
+  mono:        "'Geist Mono', monospace",
+};
+
+// ─── Supabase config ──────────────────────────────────────────────────────────
+const SUPABASE_URL = 'https://rgwbmqlcxxrynufcmwqx.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_F-ZIctvp3JyhpVGNXbMttw_9vc7tdtH';
+
+// ─── Data loading ─────────────────────────────────────────────────────────────
+async function fetchEtappen() {
+  const cols = [
+    'datum','tag_nr','etappen_nr','tagesueberschrift','erzaehl_stimmung',
+    'startort','zielort','pipeline_status','route_id',
+    'run_at','cost_total_eur','cost_llm_eur','cost_imagegen_eur',
+    'cost_video_eur','cost_tts_eur','duration_total_s','agent_timings_s',
+    'retries','errors','photos_input','photos_selected','t2i_count','video_count',
+  ].join(',');
+  const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&order=datum.desc&limit=60`;
+  const res = await fetch(url, {
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
+  });
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+function etappeName(e) {
+  if (e.startort && e.zielort) return `${e.startort} → ${e.zielort}`;
+  return e.tagesueberschrift || `Etappe ${e.tag_nr || e.etappen_nr || '?'}`;
+}
+
+function statusMap(s) {
+  if (s === 'publiziert') return 'success';
+  if (!s || s === 'neu') return 'partial';
+  return 'partial';
+}
+
+function transformData(rows) {
+  if (!rows || !rows.length) return null;
+
+  // Filtere auf Etappen die zumindest einen Namen haben
+  const valid = rows.filter(e => e.datum);
+  if (!valid.length) return null;
+
+  const latest = valid[0];
+  const chronological = [...valid].reverse();
+
+  const etappenList = chronological.map(e => ({
+    n:       e.tag_nr || 0,
+    name:    etappeName(e),
+    cost:    e.cost_total_eur || 0,
+    dur:     e.duration_total_s || 0,
+    status:  statusMap(e.pipeline_status),
+    retries: Object.values(e.retries || {}).reduce((a, b) => a + b, 0),
+  }));
+
+  const trend28 = valid.slice(0, 28).map(e => e.cost_total_eur || 0).reverse();
+  const retryHistory = valid.slice(0, 12).map(e =>
+    Object.values(e.retries || {}).reduce((a, b) => a + b, 0)
+  ).reverse();
+
+  const timings = latest.agent_timings_s || {};
+  const tripTotal = Math.round(valid.reduce((s, e) => s + (e.cost_total_eur || 0), 0) * 100) / 100;
+  const runTime = latest.run_at ? latest.run_at.slice(11, 16) : '–';
+
+  return {
+    etappe:          latest.tag_nr || 0,
+    name:            etappeName(latest),
+    date:            latest.datum || '–',
+    time:            runTime,
+    status:          statusMap(latest.pipeline_status),
+    coreTheme:       latest.tagesueberschrift || '',
+    erzaehlStimmung: latest.erzaehl_stimmung || '',
+    costs: {
+      total:    latest.cost_total_eur    || 0,
+      llm:      latest.cost_llm_eur      || 0,
+      imagegen: latest.cost_imagegen_eur || 0,
+      video:    latest.cost_video_eur    || 0,
+      tts:      latest.cost_tts_eur      || 0,
+    },
+    tripTotal,
+    duration: {
+      total:    latest.duration_total_s || 0,
+      analyst:  timings.analyst   || 0,
+      narrator: timings.narrator  || 0,
+      imagegen: timings.imagegen  || 0,
+      animator: timings.animator  || 0,
+      tts:      timings.tts       || 0,
+    },
+    retries:  latest.retries || {},
+    errors:   latest.errors  || [],
+    photos: {
+      input:    latest.photos_input    || 0,
+      selected: latest.photos_selected || 0,
+    },
+    trend28,
+    retryHistory,
+    durationHistory: {
+      imagegen: valid.slice(0, 12).map(e => (e.agent_timings_s || {}).imagegen || 0).reverse(),
+    },
+    etappenList,
+  };
+}
+
+// ─── Icons (inline SVG) ───────────────────────────────────────────────────────
+const Ic = ({ d, size = 16, sw = 2, style: s, color: c }) => (
+  <svg xmlns="http://www.w3.org/2000/svg" width={size} height={size} viewBox="0 0 24 24"
+    fill="none" stroke={c || 'currentColor'} strokeWidth={sw}
+    strokeLinecap="round" strokeLinejoin="round" style={s}>
+    {[].concat(d).map((path, i) => <path key={i} d={path} />)}
+  </svg>
+);
+const ISparkles    = p => <Ic {...p} d={["M9.937 15.5A2 2 0 0 0 8.5 14.063l-6.135-1.582a.5.5 0 0 1 0-.962L8.5 9.936A2 2 0 0 0 9.937 8.5l1.582-6.135a.5.5 0 0 1 .963 0L14.063 8.5A2 2 0 0 0 15.5 9.937l6.135 1.581a.5.5 0 0 1 0 .964L15.5 14.063a2 2 0 0 0-1.437 1.437l-1.582 6.135a.5.5 0 0 1-.963 0z","M20 3v4","M22 5h-4","M4 17v2","M5 18H3"]} />;
+const ICircleCheck = p => <Ic {...p} d={["M22 11.08V12a10 10 0 1 1-5.93-9.14","m9 11 3 3L22 4"]} />;
+const IAlert       = p => <Ic {...p} d={["m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3","M12 9v4","M12 17h.01"]} />;
+const IDash        = p => <Ic {...p} d={["M11 3H5a2 2 0 0 0-2 2v6a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z","M19 3h-2a2 2 0 0 0-2 2v2a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2z","M19 13h-2a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h2a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2z","M11 13H5a2 2 0 0 0-2 2v4a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-4a2 2 0 0 0-2-2z"]} />;
+const ICoins       = p => <Ic {...p} d={["M9 14c0 1.657 2.686 3 6 3s6-1.343 6-3-2.686-3-6-3-6 1.343-6 3z","M9 14v4c0 1.656 2.686 3 6 3s6-1.344 6-3v-4","M3 6c0 1.072 1.144 2.062 3 2.598S10.5 9 12 8.598C13.5 8.19 15 7.334 15 6.002L15 6c0-1.657-2.686-3-6-3S3 4.343 3 6z","M3 6v10c0 1.657 2.686 3 6 3 1.5 0 2.87-.24 4-.655"]} />;
+const IGauge       = p => <Ic {...p} d={["m12 14 2.5-2.5","M6.3 20.3a8 8 0 1 1 11.4 0L16 16H8z"]} />;
+const IShield      = p => <Ic {...p} d={["M20 13c0 5-3.5 7.5-7.66 8.95a1 1 0 0 1-.67-.01C7.5 20.5 4 18 4 13V6a1 1 0 0 1 1-1c2 0 4.5-1.2 6.24-2.72a1.17 1.17 0 0 1 1.52 0C14.51 3.81 17 5 19 5a1 1 0 0 1 1 1z","m9 12 2 2 4-4"]} />;
+const IEuro        = p => <Ic {...p} d={["M4 10h12","M4 14h12","M19.5 9.5c-1.5-2.5-4-3.5-6.5-3.5-5 0-8 3.5-8 8s3 8 8 8c2.5 0 5-1 6.5-3.5"]} />;
+const IClock       = p => <Ic {...p} d={["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z","M12 6v6l4 2"]} />;
+const IRefresh     = p => <Ic {...p} d={["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8","M21 3v5h-5","M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16","M8 16H3v5"]} />;
+const ITrendDown   = p => <Ic {...p} d={["M22 17L13.5 8.5 8.5 13.5 2 7","M16 17h6v-6"]} />;
+const ITrendUp     = p => <Ic {...p} d={["M22 7L13.5 15.5 8.5 10.5 2 17","M16 7h6v6"]} />;
+
+// ─── Shared primitives ────────────────────────────────────────────────────────
+function Pill({ state = 'ok', label }) {
+  const m = {
+    ok:      { bg: T.okSoft,   fg: T.ok,   Icon: ICircleCheck },
+    partial: { bg: T.warnSoft, fg: T.warn, Icon: IAlert },
+    warn:    { bg: T.warnSoft, fg: T.warn, Icon: IAlert },
+    error:   { bg: T.errSoft,  fg: T.err,  Icon: IAlert },
+  }[state] || { bg: T.okSoft, fg: T.ok, Icon: ICircleCheck };
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px',
+      background: m.bg, color: m.fg, fontFamily: T.sans, fontSize: 11, fontWeight: 500, borderRadius: 4 }}>
+      <m.Icon size={12} sw={2.2} /> {label}
+    </span>
+  );
+}
+
+function AreaChart({ points, h = 60, accent, id }) {
+  const col = accent || T.accent;
+  const gid = `g-${id || Math.random().toString(36).slice(2)}`;
+  const max = Math.max(...points);
+  const min = Math.min(...points);
+  const range = max - min || 1;
+  const w = 300;
+  const step = w / (points.length - 1);
+  const toY = v => 6 + (1 - (v - min) / range) * (h - 12);
+  const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${toY(p).toFixed(1)}`).join(' ');
+  const area = `${line} L${w},${h} L0,${h} Z`;
+  return (
+    <svg viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ width: '100%', height: h, display: 'block' }}>
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={col} stopOpacity="0.28" />
+          <stop offset="100%" stopColor={col} stopOpacity="0" />
+        </linearGradient>
+      </defs>
+      <path d={area} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={col} strokeWidth="2" vectorEffect="non-scaling-stroke" />
+      <circle cx={(points.length - 1) * step} cy={toY(points[points.length - 1])} r="3.5" fill={col} stroke={T.surface} strokeWidth="2" />
+    </svg>
+  );
+}
+
+function BarChart({ values, h = 90, colorFn }) {
+  const max = Math.max(...values, 1);
+  return (
+    <div style={{ display: 'flex', alignItems: 'flex-end', gap: 6, height: h }}>
+      {values.map((v, i) => (
+        <div key={i} style={{ flex: 1, height: `${Math.max((v / max) * 100, 4)}%`,
+          background: colorFn ? colorFn(v, i) : T.accent,
+          borderRadius: '4px 4px 2px 2px' }} />
+      ))}
+    </div>
+  );
+}
+
+function KPI({ icon: Icon, label, value, sub, trend }) {
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+          <div style={{ width: 28, height: 28, borderRadius: 8, background: T.accentSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.accent }}>
+            <Icon size={14} sw={2} />
+          </div>
+          <span style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, fontWeight: 500 }}>{label}</span>
+        </div>
+        {trend && (
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '3px 7px',
+            background: trend.dir === 'up' ? T.errSoft : T.okSoft,
+            color: trend.dir === 'up' ? T.err : T.ok,
+            fontFamily: T.mono, fontSize: 10, fontWeight: 600, borderRadius: 4 }}>
+            {trend.dir === 'up' ? <ITrendUp size={10} /> : <ITrendDown size={10} />} {trend.v}
+          </span>
+        )}
+      </div>
+      <div style={{ fontFamily: T.serif, fontSize: 44, fontWeight: 400, color: T.ink, lineHeight: 1, letterSpacing: -1, marginBottom: 8 }}>{value}</div>
+      <div style={{ fontFamily: T.sans, fontSize: 12, color: T.muted }}>{sub}</div>
+    </div>
+  );
+}
+
+function Panel({ children, style: s }) {
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20, ...s }}>
+      {children}
+    </div>
+  );
+}
+
+function PanelHeader({ icon: Icon, label, serif, right }) {
+  return (
+    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12, marginBottom: 18 }}>
+      <div style={{ minWidth: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: serif ? 8 : 0 }}>
+          {Icon && <Icon size={15} style={{ color: T.accent }} sw={2} />}
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{label}</span>
+        </div>
+        {serif && <div style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, lineHeight: 1.2, color: T.ink }}>{serif}</div>}
+      </div>
+      {right && <div style={{ flexShrink: 0 }}>{right}</div>}
+    </div>
+  );
+}
+
+function AgentBar({ name, seconds, maxSec = 520 }) {
+  const pct = Math.min(100, (seconds / maxSec) * 100);
+  const intense = pct > 60;
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 500 }}>{name}</span>
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{seconds}<span style={{ color: T.mutedSoft }}>s</span></span>
+      </div>
+      <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`,
+          background: intense ? `linear-gradient(90deg, ${T.accent}, ${T.accentDeep})` : T.accent,
+          borderRadius: 4 }} />
+      </div>
+    </div>
+  );
+}
+
+function CostBar({ name, value, pct, color }) {
+  return (
+    <div>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
+        <span style={{ display: 'inline-flex', alignItems: 'center', gap: 7 }}>
+          <span style={{ width: 8, height: 8, borderRadius: 2, background: color, flexShrink: 0 }} />
+          <span style={{ fontFamily: T.sans, fontSize: 12.5, color: T.ink, fontWeight: 500 }}>{name}</span>
+        </span>
+        <span>
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.mutedSoft, marginRight: 8 }}>{pct}%</span>
+          <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 500 }}>{value}</span>
+        </span>
+      </div>
+      <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 4 }} />
+      </div>
+    </div>
+  );
+}
+
+function StatusDot({ status }) {
+  const c = { success: T.ok, partial: T.warn, error: T.err }[status] || T.muted;
+  return <span style={{ width: 7, height: 7, borderRadius: '50%', background: c, display: 'inline-block', flexShrink: 0 }} />;
+}
+
+function TrendBadge({ dir, val }) {
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '3px 7px',
+      background: dir === 'up' ? T.errSoft : T.okSoft,
+      color: dir === 'up' ? T.err : T.ok,
+      fontFamily: T.mono, fontSize: 10, fontWeight: 600, borderRadius: 4 }}>
+      {dir === 'up' ? <ITrendUp size={10} /> : <ITrendDown size={10} />} {val}
+    </span>
+  );
+}
+
+// ─── Tab content ──────────────────────────────────────────────────────────────
+function TabUebersicht() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+        <KPI icon={IEuro}    label="Kosten (Run)"  value="€0.43" sub={`Σ Reise €${data.tripTotal.toFixed(2)} · ${data.etappe} Etappen`} trend={{ dir: 'down', v: '12%' }} />
+        <KPI icon={IClock}   label="Dauer"         value="847s"  sub="14:07 Min · Ø 720s" trend={{ dir: 'down', v: '6%' }} />
+        <KPI icon={IRefresh} label="Retries"       value="2"     sub="1 Warnung · alle resolved" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.1fr 1fr', gap: 14 }}>
+        <Panel>
+          <PanelHeader icon={ICoins} label="Kosten-Breakdown" serif="Wo geht das Geld hin?"
+            right={<div style={{ textAlign: 'right' }}>
+              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>€0.43</div>
+              <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>dieser Run</div>
+            </div>} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <CostBar name="LLM"      value="€0.18" pct={42} color={T.accent} />
+            <CostBar name="ImageGen" value="€0.12" pct={28} color="#9F6BF5" />
+            <CostBar name="Video"    value="€0.09" pct={21} color="#C2A4F8" />
+            <CostBar name="TTS"      value="€0.04" pct={9}  color="#DFCEFA" />
+          </div>
+          <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, fontWeight: 500 }}>Trend · 28 Tage</span>
+              <TrendBadge dir="down" val="stabil" />
+            </div>
+            <AreaChart points={data.trend28} h={56} id="ov-cost" />
+          </div>
+        </Panel>
+
+        <Panel>
+          <PanelHeader icon={IGauge} label="Dauer pro Agent" serif="Wer bremst?"
+            right={<div style={{ textAlign: 'right' }}>
+              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>847<span style={{ fontSize: 14, color: T.muted }}>s</span></div>
+              <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>Σ Gesamtdauer</div>
+            </div>} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+            <AgentBar name="analyst"  seconds={12} />
+            <AgentBar name="narrator" seconds={8} />
+            <AgentBar name="imagegen" seconds={277} />
+            <AgentBar name="video"    seconds={510} />
+            <AgentBar name="tts"      seconds={40} />
+          </div>
+          <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, fontWeight: 500 }}>imagegen · letzte 12 Etappen</div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', marginTop: 5, background: T.warnSoft, color: T.warn, borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
+                <ITrendUp size={11} sw={2.2} /> <span style={{ fontFamily: T.mono }}>+18%</span> langsamer
+              </div>
+            </div>
+            <div style={{ width: 90, flexShrink: 0 }}>
+              <AreaChart points={data.durationHistory.imagegen} h={36} accent={T.warn} id="ov-img" />
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel>
+        <PanelHeader icon={IShield} label="Reliability" serif="Hat alles funktioniert?"
+          right={<Pill state="warn" label="1 aktive Warnung" />} />
+        <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 20 }}>
+          <div>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 8 }}>Retries pro Etappe · letzte 12</div>
+            <BarChart values={data.retryHistory} h={90}
+              colorFn={(v) => v > 1 ? `linear-gradient(180deg, ${T.warn}, ${T.warn}cc)` : v > 0 ? T.accent : T.surfaceAlt} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>
+              <span>E1</span><span>E4</span><span>E8</span><span>E12</span>
+            </div>
+          </div>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            <div style={{ padding: 14, background: T.warnSoft, borderRadius: 8, borderLeft: `3px solid ${T.warn}` }}>
+              <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+                <IAlert size={15} style={{ color: T.warn, marginTop: 1, flexShrink: 0 }} sw={2} />
+                <div>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>ImageGen · Timeout</div>
+                  <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3, lineHeight: 1.4 }}>Retry #2 erfolgreich · 14:22 · kein Eingriff nötig</div>
+                </div>
+              </div>
+            </div>
+            <div style={{ padding: 14, background: T.accentSoft, borderRadius: 8, borderLeft: `3px solid ${T.accent}` }}>
+              <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+                <ISparkles size={15} style={{ color: T.accent, marginTop: 1, flexShrink: 0 }} sw={2} />
+                <div>
+                  <div style={{ fontFamily: T.mono, fontSize: 10, color: T.accentInk, textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 3 }}>Frühwarnung</div>
+                  <div style={{ fontSize: 12.5, color: T.ink, lineHeight: 1.4 }}>ImageGen retried häufiger als üblich — <span style={{ fontFamily: T.mono }}>Ø 0.3 → 1.2</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function TabKosten() {
+  const COST_COLORS = { LLM: T.accent, ImageGen: '#9F6BF5', Video: '#C2A4F8', TTS: '#DFCEFA' };
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+        <KPI icon={IEuro} label="Kosten heute" value="€0.43" sub="dieser Run" trend={{ dir: 'down', v: '12%' }} />
+        <KPI icon={IEuro} label="Kosten Reise" value="€4.82" sub="12 Etappen · Ø €0.40" trend={{ dir: 'down', v: '8%' }} />
+        <KPI icon={IEuro} label="Teuerste Etappe" value="€0.52" sub="E3 · Brig → Domodossola" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.4fr 1fr', gap: 14 }}>
+        <Panel>
+          <PanelHeader icon={ICoins} label="Kosten-Trend" serif="28 Tage Verlauf"
+            right={<TrendBadge dir="down" val="stabil" />} />
+          <AreaChart points={data.trend28} h={120} id="k-trend" />
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>
+            <span>T1</span><span>T7</span><span>T14</span><span>T21</span><span>T28</span>
+          </div>
+        </Panel>
+
+        <Panel>
+          <PanelHeader icon={ICoins} label="Breakdown heute" serif="Pro Kategorie" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+            <CostBar name="LLM"      value="€0.18" pct={42} color={T.accent} />
+            <CostBar name="ImageGen" value="€0.12" pct={28} color="#9F6BF5" />
+            <CostBar name="Video"    value="€0.09" pct={21} color="#C2A4F8" />
+            <CostBar name="TTS"      value="€0.04" pct={9}  color="#DFCEFA" />
+          </div>
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 10 }}>Anteil pro Kategorie</div>
+            <div style={{ display: 'flex', height: 12, borderRadius: 6, overflow: 'hidden', gap: 2 }}>
+              {[{ pct: 42, c: T.accent }, { pct: 28, c: '#9F6BF5' }, { pct: 21, c: '#C2A4F8' }, { pct: 9, c: '#DFCEFA' }].map((s, i) => (
+                <div key={i} style={{ width: `${s.pct}%`, background: s.c, borderRadius: i === 0 ? '6px 0 0 6px' : i === 3 ? '0 6px 6px 0' : 0 }} />
+              ))}
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel>
+        <PanelHeader icon={ICoins} label="Kosten pro Etappe" serif="Alle Etappen im Vergleich" />
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: T.sans, fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                {['#', 'Etappe', 'Kosten', 'LLM', 'ImageGen', 'Video', 'TTS', ''].map(h => (
+                  <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontFamily: T.mono, fontSize: 10, color: T.muted, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.etappenList.map(e => (
+                <tr key={e.n} style={{ borderBottom: `1px solid ${T.border}`, background: e.n === data.etappe ? T.accentSoft : 'transparent' }}>
+                  <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>{e.n}</td>
+                  <td style={{ padding: '10px', color: T.ink, fontWeight: e.n === data.etappe ? 600 : 400 }}>{e.name}</td>
+                  <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>€{e.cost.toFixed(2)}</td>
+                  {[42, 28, 21, 9].map((p, i) => (
+                    <td key={i} style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{(e.cost * p / 100).toFixed(2)}</td>
+                  ))}
+                  <td style={{ padding: '10px' }}>
+                    <div style={{ width: 60, height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${(e.cost / 0.55) * 100}%`, background: T.accent, borderRadius: 3 }} />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function TabPerformance() {
+  const agents = [
+    { name: 'analyst',  seconds: 12,  history: [10, 11, 10, 12, 11, 13, 11, 12, 10, 13, 11, 12] },
+    { name: 'narrator', seconds: 8,   history: [7, 8, 8, 7, 9, 8, 8, 7, 9, 8, 8, 8] },
+    { name: 'imagegen', seconds: 277, history: [120, 135, 140, 150, 155, 180, 200, 210, 220, 245, 260, 277] },
+    { name: 'video',    seconds: 510, history: [390, 400, 420, 430, 440, 460, 470, 480, 490, 498, 505, 510] },
+    { name: 'tts',      seconds: 40,  history: [35, 36, 37, 38, 37, 39, 38, 40, 39, 41, 40, 40] },
+  ];
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+        <KPI icon={IClock} label="Gesamtdauer" value="847s"  sub="14:07 Min" trend={{ dir: 'down', v: '6%' }} />
+        <KPI icon={IClock} label="Ø über Reise" value="720s" sub="12 Etappen" />
+        <KPI icon={IClock} label="Langsamster Agent" value="video" sub="510s · 60% der Laufzeit" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 14 }}>
+        <Panel>
+          <PanelHeader icon={IGauge} label="Dauer pro Agent" serif="Dieser Run"
+            right={<div style={{ textAlign: 'right' }}>
+              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>847<span style={{ fontSize: 14, color: T.muted }}>s</span></div>
+              <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>Σ Gesamtdauer</div>
+            </div>} />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+            {agents.map(a => <AgentBar key={a.name} name={a.name} seconds={a.seconds} />)}
+          </div>
+        </Panel>
+
+        <Panel>
+          <PanelHeader icon={IGauge} label="Zeitanteil pro Agent" serif="Verteilung" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+            {agents.map(a => {
+              const pct = Math.round((a.seconds / 847) * 100);
+              return (
+                <div key={a.name} style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                  <div style={{ width: 70, fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 500 }}>{a.name}</div>
+                  <div style={{ flex: 1, height: 14, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct}%`, background: pct > 50 ? `linear-gradient(90deg, ${T.accent}, ${T.accentDeep})` : T.accent, borderRadius: 4 }} />
+                  </div>
+                  <div style={{ width: 36, fontFamily: T.mono, fontSize: 11, color: T.muted, textAlign: 'right' }}>{pct}%</div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 8 }}>Zeitverteilung</div>
+            <div style={{ display: 'flex', height: 14, borderRadius: 6, overflow: 'hidden', gap: 2 }}>
+              {agents.map((a, i) => {
+                const pct = (a.seconds / 847) * 100;
+                const colors = [T.accent, '#9F6BF5', '#C2A4F8', '#DFCEFA', T.accentDeep];
+                return <div key={i} style={{ width: `${pct}%`, background: colors[i] }} />;
+              })}
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel>
+        <PanelHeader icon={IGauge} label="Trend pro Agent" serif="Wie entwickelt sich die Laufzeit?" />
+        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 14 }}>
+          {agents.map(a => {
+            const first = a.history[0];
+            const last = a.history[a.history.length - 1];
+            const delta = ((last - first) / first * 100).toFixed(0);
+            const up = delta > 0;
+            return (
+              <div key={a.name} style={{ background: T.surfaceAlt, borderRadius: 8, padding: 12 }}>
+                <div style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 600, marginBottom: 4 }}>{a.name}</div>
+                <AreaChart points={a.history} h={40} accent={up && Math.abs(delta) > 5 ? T.warn : T.accent} id={`perf-${a.name}`} />
+                <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>{first}s → {last}s</span>
+                  <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600,
+                    color: up && Math.abs(delta) > 5 ? T.warn : up ? T.muted : T.ok }}>
+                    {up ? '+' : ''}{delta}%
+                  </span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </Panel>
+
+      <Panel>
+        <PanelHeader icon={IGauge} label="Laufzeit pro Etappe" serif="Alle Etappen" />
+        <div style={{ overflowX: 'auto' }}>
+          <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: T.sans, fontSize: 12 }}>
+            <thead>
+              <tr style={{ borderBottom: `1px solid ${T.border}` }}>
+                {['#', 'Etappe', 'Gesamt', 'Status', ''].map(h => (
+                  <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontFamily: T.mono, fontSize: 10, color: T.muted, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {data.etappenList.map(e => (
+                <tr key={e.n} style={{ borderBottom: `1px solid ${T.border}`, background: e.n === data.etappe ? T.accentSoft : 'transparent' }}>
+                  <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>{e.n}</td>
+                  <td style={{ padding: '10px', color: T.ink, fontWeight: e.n === data.etappe ? 600 : 400 }}>{e.name}</td>
+                  <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>{e.dur}s</td>
+                  <td style={{ padding: '10px' }}><Pill state={e.status} label={e.status} /></td>
+                  <td style={{ padding: '10px' }}>
+                    <div style={{ width: 80, height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${(e.dur / 850) * 100}%`, background: e.dur > 800 ? T.warn : T.accent, borderRadius: 3 }} />
+                    </div>
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+function TabReliability() {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
+        <KPI icon={IShield} label="Retries heute"       value="2"    sub="imagegen · alle resolved" />
+        <KPI icon={IShield} label="Retries Reise Σ"     value="10"   sub="12 Etappen · Ø 0.8 / Lauf" trend={{ dir: 'up', v: '+18%' }} />
+        <KPI icon={IShield} label="Erfolgsrate"         value="100%" sub="0 unresolvte Fehler" />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: '1.2fr 1fr', gap: 14 }}>
+        <Panel>
+          <PanelHeader icon={IShield} label="Retry-Verlauf" serif="Letzte 12 Etappen" />
+          <BarChart values={data.retryHistory} h={120}
+            colorFn={(v) => v > 1 ? `linear-gradient(180deg, ${T.warn}, ${T.warn}cc)` : v > 0 ? T.accent : T.surfaceAlt} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>
+            {data.etappenList.map(e => <span key={e.n} style={{ flex: 1, textAlign: 'center' }}>{e.n}</span>)}
+          </div>
+          <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 16 }}>
+            {[{ color: T.accent, label: '1 Retry' }, { color: T.warn, label: '2+ Retries' }, { color: T.surfaceAlt, label: 'Kein Retry' }].map(l => (
+              <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+                <div style={{ width: 10, height: 10, borderRadius: 2, background: l.color, border: `1px solid ${T.border}` }} />
+                <span style={{ fontSize: 11, color: T.muted, fontFamily: T.sans }}>{l.label}</span>
+              </div>
+            ))}
+          </div>
+        </Panel>
+
+        <Panel>
+          <PanelHeader icon={IShield} label="Retries pro Agent" serif="Häufigkeit" />
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {[
+              { name: 'imagegen', retries: 2, total: 12 },
+              { name: 'video',    retries: 1, total: 12 },
+              { name: 'analyst',  retries: 0, total: 12 },
+              { name: 'narrator', retries: 0, total: 12 },
+              { name: 'tts',      retries: 0, total: 12 },
+            ].map(a => {
+              const pct = (a.retries / a.total) * 100;
+              return (
+                <div key={a.name}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                    <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 500 }}>{a.name}</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 11, color: a.retries > 0 ? T.warn : T.mutedSoft }}>
+                      {a.retries} / {a.total}
+                    </span>
+                  </div>
+                  <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
+                    <div style={{ height: '100%', width: `${pct || 2}%`, background: a.retries > 1 ? T.warn : a.retries > 0 ? T.accent : T.surfaceAlt, borderRadius: 4 }} />
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 4 }}>Trend imagegen</div>
+            <AreaChart points={[0.2, 0.3, 0.3, 0.4, 0.5, 0.6, 0.8, 0.9, 1.0, 1.1, 1.1, 1.2]} h={36} accent={T.warn} id="rel-img-trend" />
+            <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+              <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>Ø 0.3 → 1.2</span>
+              <TrendBadge dir="up" val="+18%" />
+            </div>
+          </div>
+        </Panel>
+      </div>
+
+      <Panel>
+        <PanelHeader icon={IAlert} label="Ereignisse" serif="Alle Fehler & Warnungen" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ padding: 14, background: T.warnSoft, borderRadius: 8, borderLeft: `3px solid ${T.warn}` }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <IAlert size={16} style={{ color: T.warn, marginTop: 2, flexShrink: 0 }} sw={2} />
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>ImageGen · Timeout</div>
+                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                    <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>14:22</span>
+                    <Pill state="ok" label="resolved" />
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 4, lineHeight: 1.5 }}>
+                  Request timed out nach 30s · Retry #1 failed · Retry #2 erfolgreich · kein manueller Eingriff nötig
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <div style={{ padding: 14, background: T.accentSoft, borderRadius: 8, borderLeft: `3px solid ${T.accent}` }}>
+            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
+              <ISparkles size={16} style={{ color: T.accent, marginTop: 2, flexShrink: 0 }} sw={2} />
+              <div style={{ flex: 1 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+                  <div>
+                    <div style={{ fontFamily: T.mono, fontSize: 10, color: T.accentInk, textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 3 }}>Frühwarnung · Systembeobachtung</div>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>ImageGen: Retry-Rate erhöht</div>
+                  </div>
+                </div>
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 4, lineHeight: 1.5 }}>
+                  Über die letzten 12 Etappen steigt die Retry-Rate von <span style={{ fontFamily: T.mono }}>Ø 0.3</span> auf <span style={{ fontFamily: T.mono }}>1.2</span>. Noch kein kritischer Schwellenwert, aber zu beobachten.
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {data.etappenList.filter(e => e.retries > 0).map(e => (
+            <div key={e.n} style={{ padding: 14, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8 }}>
+              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
+                <div style={{ width: 28, height: 28, borderRadius: 6, background: T.surfaceAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: T.mono, fontSize: 11, color: T.muted, fontWeight: 600 }}>E{e.n}</div>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12.5, color: T.ink, fontWeight: 500 }}>{e.name}</div>
+                  <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{e.retries} Retr{e.retries === 1 ? 'y' : 'ies'} · alle resolved</div>
+                </div>
+                <Pill state={e.retries > 1 ? 'warn' : 'ok'} label={`${e.retries} Retr${e.retries === 1 ? 'y' : 'ies'}`} />
+              </div>
+            </div>
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
+// ─── Time scope switcher ──────────────────────────────────────────────────────
+function ScopeSwitcher({ scope, onChange }) {
+  return (
+    <div style={{ display: 'flex', gap: 4, background: T.surfaceAlt, padding: 3, borderRadius: 8 }}>
+      {['Heute', '28 Tage', 'Reise'].map((l, i) => (
+        <div key={l} onClick={() => onChange(l)}
+          style={{ padding: '6px 12px', borderRadius: 5, cursor: 'pointer',
+            background: scope === l ? T.surface : 'transparent',
+            color: scope === l ? T.ink : T.muted,
+            boxShadow: scope === l ? '0 1px 2px rgba(20,16,28,0.06)' : 'none',
+            fontSize: 12, fontWeight: 500, transition: 'all 0.1s' }}>{l}</div>
+      ))}
+    </div>
+  );
+}
+
+// ─── Main App ─────────────────────────────────────────────────────────────────
+const TABS = [
+  { id: 'uebersicht',  label: 'Übersicht',  Icon: IDash,    Content: TabUebersicht },
+  { id: 'kosten',      label: 'Kosten',     Icon: ICoins,   Content: TabKosten },
+  { id: 'performance', label: 'Performance',Icon: IGauge,   Content: TabPerformance },
+  { id: 'reliability', label: 'Reliability',Icon: IShield,  Content: TabReliability },
+];
+
+function App() {
+  const [tab, setTab]       = useState('uebersicht');
+  const [scope, setScope]   = useState('Heute');
+  const [data, setData]     = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
+
+  React.useEffect(() => {
+    fetchEtappen()
+      .then(rows => setData(transformData(rows)))
+      .catch(e  => setLoadError(e.message))
+      .finally(() => setLoading(false));
+  }, []);
+
+  if (loading) return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', fontFamily: T.sans, color: T.muted, fontSize: 14 }}>
+      Lade Pipeline-Daten…
+    </div>
+  );
+  if (loadError || !data) return (
+    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', fontFamily: T.sans, color: T.err, fontSize: 14 }}>
+      Fehler: {loadError || 'Keine Etappen gefunden'}
+    </div>
+  );
+
+  const active = TABS.find(t => t.id === tab);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: T.bg, color: T.ink, fontFamily: T.sans }}>
+      {/* Header */}
+      <div style={{ background: T.surface, borderBottom: `1px solid ${T.border}`, padding: '14px 28px', flexShrink: 0 }}>
+        {/* Top row */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
+            <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <ISparkles size={15} sw={2} />
+            </div>
+            <div>
+              <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: -0.2 }}>INSTA Pipeline</div>
+              <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>Operations · MVP</div>
+            </div>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <Pill state={data.status} label={data.status} />
+            <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>Etappe {data.etappe} · {data.date} {data.time}</span>
+          </div>
+        </div>
+
+        {/* Title row */}
+        <div style={{ marginTop: 20 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8, color: T.accent }}>
+            <div style={{ width: 24, height: 1, background: T.accent }} />
+            <span style={{ fontFamily: T.mono, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 500 }}>Heute · Tag {data.etappe} von 30</span>
+          </div>
+          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20 }}>
+            <h1 style={{ fontFamily: T.serif, fontSize: 34, fontWeight: 400, margin: 0, letterSpacing: -0.6, lineHeight: 1.05, whiteSpace: 'nowrap' }}>
+              {data.name.replace('→', '')} <span style={{ color: T.accent, fontStyle: 'italic' }}>→</span> {data.name.split('→')[1]?.trim()}
+            </h1>
+            <ScopeSwitcher scope={scope} onChange={setScope} />
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div style={{ display: 'flex', gap: 2, marginTop: 18 }}>
+          {TABS.map(t => (
+            <div key={t.id} onClick={() => setTab(t.id)}
+              style={{ display: 'flex', alignItems: 'center', gap: 7, padding: '9px 14px', borderRadius: 8, cursor: 'pointer',
+                background: tab === t.id ? T.accentSoft : 'transparent',
+                color: tab === t.id ? T.accentInk : T.muted,
+                fontFamily: T.sans, fontSize: 13, fontWeight: tab === t.id ? 600 : 500,
+                transition: 'background 0.12s, color 0.12s' }}>
+              <t.Icon size={14} sw={tab === t.id ? 2 : 1.7} />
+              {t.label}
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* Scrollable content */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '24px 28px' }}>
+        <active.Content />
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
