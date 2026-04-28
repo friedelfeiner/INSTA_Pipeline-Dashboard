@@ -54,7 +54,7 @@ const SUPABASE_KEY = 'sb_publishable_F-ZIctvp3JyhpVGNXbMttw_9vc7tdtH';
 // ─── Data loading ─────────────────────────────────────────────────────────────
 async function fetchEtappen() {
   const cols = [
-    'datum','tag_nr','etappen_nr','tagesueberschrift','erzaehl_stimmung',
+    'id','datum','tag_nr','etappen_nr','tagesueberschrift','erzaehl_stimmung',
     'startort','zielort','pipeline_status','route_id',
     'run_at','cost_total_eur','cost_llm_eur','cost_imagegen_eur',
     'cost_video_eur','cost_tts_eur','duration_total_s','agent_timings_s',
@@ -65,6 +65,21 @@ async function fetchEtappen() {
     headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
   });
   if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
+async function fetchLatestRun() {
+  const url = `${SUPABASE_URL}/rest/v1/pipeline_steps?order=ts.desc&limit=1&select=etappe_id,ts`;
+  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  if (!res.ok) return null;
+  const rows = await res.json();
+  return rows.length ? rows[0].etappe_id : null;
+}
+
+async function fetchSteps(etappeId) {
+  const url = `${SUPABASE_URL}/rest/v1/pipeline_steps?etappe_id=eq.${etappeId}&order=ts.asc`;
+  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  if (!res.ok) return [];
   return res.json();
 }
 
@@ -90,12 +105,27 @@ function transformData(rows) {
   const chronological = [...valid].reverse();
 
   const etappenList = chronological.map(e => ({
-    n:       e.tag_nr || 0,
-    name:    etappeName(e),
-    cost:    e.cost_total_eur || 0,
-    dur:     e.duration_total_s || 0,
-    status:  statusMap(e.pipeline_status),
-    retries: Object.values(e.retries || {}).reduce((a, b) => a + b, 0),
+    id:       e.id,
+    n:        e.tag_nr || 0,
+    name:     etappeName(e),
+    datum:    e.datum || '',
+    stimmung: e.erzaehl_stimmung || '',
+    headline: e.tagesueberschrift || '',
+    status:   statusMap(e.pipeline_status),
+    run_at:   e.run_at || null,
+    cost:     e.cost_total_eur    || 0,
+    llm:      e.cost_llm_eur      || 0,
+    imagegen: e.cost_imagegen_eur || 0,
+    video:    e.cost_video_eur    || 0,
+    tts:      e.cost_tts_eur      || 0,
+    dur:      e.duration_total_s  || 0,
+    timings:  e.agent_timings_s   || {},
+    photos_input:    e.photos_input    || 0,
+    photos_selected: e.photos_selected || 0,
+    t2i:      e.t2i_count   || 0,
+    clips:    e.video_count || 0,
+    retries:  Object.values(e.retries || {}).reduce((a, b) => a + b, 0),
+    errors:   e.errors || [],
   }));
 
   const trend28 = valid.slice(0, 28).map(e => e.cost_total_eur || 0).reverse();
@@ -166,6 +196,7 @@ const IClock       = p => <Ic {...p} d={["M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-2
 const IRefresh     = p => <Ic {...p} d={["M3 12a9 9 0 0 1 9-9 9.75 9.75 0 0 1 6.74 2.74L21 8","M21 3v5h-5","M21 12a9 9 0 0 1-9 9 9.75 9.75 0 0 1-6.74-2.74L3 16","M8 16H3v5"]} />;
 const ITrendDown   = p => <Ic {...p} d={["M22 17L13.5 8.5 8.5 13.5 2 7","M16 17h6v-6"]} />;
 const ITrendUp     = p => <Ic {...p} d={["M22 7L13.5 15.5 8.5 10.5 2 17","M16 7h6v6"]} />;
+const IActivity    = p => <Ic {...p} d={["M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"]} />;
 
 // ─── Shared primitives ────────────────────────────────────────────────────────
 function Pill({ state = 'ok', label }) {
@@ -325,7 +356,7 @@ function TrendBadge({ dir, val }) {
 }
 
 // ─── Tab content ──────────────────────────────────────────────────────────────
-function TabUebersicht() {
+function TabUebersicht({ data }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
@@ -421,8 +452,33 @@ function TabUebersicht() {
   );
 }
 
-function TabKosten() {
+function TabKosten({ data }) {
+  const [sortBy, setSortBy] = React.useState('n');
+  const [sortDir, setSortDir] = React.useState('asc');
+  const [selected, setSelected] = React.useState(null);
   const COST_COLORS = { LLM: T.accent, ImageGen: '#9F6BF5', Video: '#C2A4F8', TTS: '#DFCEFA' };
+
+  const toggleSort = (col) => {
+    if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
+    else { setSortBy(col); setSortDir(col === 'n' ? 'asc' : 'desc'); }
+  };
+
+  const sorted = [...data.etappenList].sort((a, b) => {
+    const v = sortBy === 'n' ? a.n - b.n : a.cost - b.cost;
+    return sortDir === 'asc' ? v : -v;
+  });
+
+  const SortTh = ({ col, children }) => {
+    const active = sortBy === col;
+    return (
+      <th onClick={() => toggleSort(col)} style={{ textAlign: 'left', padding: '8px 10px', cursor: 'pointer',
+        fontFamily: T.mono, fontSize: 10, color: active ? T.accent : T.muted,
+        fontWeight: active ? 700 : 500, textTransform: 'uppercase', letterSpacing: 0.5,
+        userSelect: 'none', whiteSpace: 'nowrap' }}>
+        {children} {active ? (sortDir === 'asc' ? '↑' : '↓') : <span style={{ opacity: 0.3 }}>↕</span>}
+      </th>
+    );
+  };
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
@@ -466,36 +522,54 @@ function TabKosten() {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: T.sans, fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-                {['#', 'Etappe', 'Kosten', 'LLM', 'ImageGen', 'Video', 'TTS', ''].map(h => (
+                <SortTh col="n">#</SortTh>
+                <th style={{ textAlign: 'left', padding: '8px 10px', fontFamily: T.mono, fontSize: 10, color: T.muted, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>Etappe</th>
+                <SortTh col="cost">Kosten</SortTh>
+                {['LLM', 'ImageGen', 'Video', 'TTS'].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontFamily: T.mono, fontSize: 10, color: T.muted, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
                 ))}
+                <th />
               </tr>
             </thead>
             <tbody>
-              {data.etappenList.map(e => (
-                <tr key={e.n} style={{ borderBottom: `1px solid ${T.border}`, background: e.n === data.etappe ? T.accentSoft : 'transparent' }}>
-                  <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>{e.n}</td>
-                  <td style={{ padding: '10px', color: T.ink, fontWeight: e.n === data.etappe ? 600 : 400 }}>{e.name}</td>
-                  <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>€{e.cost.toFixed(2)}</td>
-                  {[42, 28, 21, 9].map((p, i) => (
-                    <td key={i} style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{(e.cost * p / 100).toFixed(2)}</td>
-                  ))}
-                  <td style={{ padding: '10px' }}>
-                    <div style={{ width: 60, height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${(e.cost / 0.55) * 100}%`, background: T.accent, borderRadius: 3 }} />
-                    </div>
-                  </td>
-                </tr>
-              ))}
+              {sorted.map(e => {
+                const maxCost = Math.max(...data.etappenList.map(x => x.cost), 0.01);
+                return (
+                  <tr key={e.n} onClick={() => setSelected(e)}
+                    style={{ borderBottom: `1px solid ${T.border}`,
+                      background: e.n === data.etappe ? T.accentSoft : 'transparent',
+                      cursor: 'pointer', transition: 'background 0.1s' }}
+                    onMouseEnter={ev => ev.currentTarget.style.background = T.surfaceAlt}
+                    onMouseLeave={ev => ev.currentTarget.style.background = e.n === data.etappe ? T.accentSoft : 'transparent'}>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>{e.n}</td>
+                    <td style={{ padding: '10px', color: T.ink, fontWeight: e.n === data.etappe ? 600 : 400 }}>
+                      <div>{e.name}</div>
+                      {e.stimmung && <div style={{ fontSize: 10, color: T.mutedSoft, fontStyle: 'italic', marginTop: 2 }}>{e.stimmung}</div>}
+                    </td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>€{e.cost.toFixed(2)}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{e.llm.toFixed(2)}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{e.imagegen.toFixed(2)}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{e.video.toFixed(2)}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{e.tts.toFixed(2)}</td>
+                    <td style={{ padding: '10px' }}>
+                      <div style={{ width: 60, height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${(e.cost / maxCost) * 100}%`, background: T.accent, borderRadius: 3 }} />
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>
       </Panel>
+
+      {selected && <EtappeDetailModal etappe={selected} onClose={() => setSelected(null)} />}
     </div>
   );
 }
 
-function TabPerformance() {
+function TabPerformance({ data }) {
   const agents = [
     { name: 'analyst',  seconds: 12,  history: [10, 11, 10, 12, 11, 13, 11, 12, 10, 13, 11, 12] },
     { name: 'narrator', seconds: 8,   history: [7, 8, 8, 7, 9, 8, 8, 7, 9, 8, 8, 8] },
@@ -610,7 +684,7 @@ function TabPerformance() {
   );
 }
 
-function TabReliability() {
+function TabReliability({ data }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 14 }}>
@@ -730,6 +804,290 @@ function TabReliability() {
   );
 }
 
+// ─── Etappe Detail Modal ──────────────────────────────────────────────────────
+function EtappeDetailModal({ etappe, onClose }) {
+  const [steps, setSteps] = React.useState([]);
+  React.useEffect(() => {
+    if (etappe?.id) fetchSteps(etappe.id).then(setSteps);
+  }, [etappe?.id]);
+
+  if (!etappe) return null;
+
+  const maxCost = Math.max(etappe.llm, etappe.imagegen, etappe.video, etappe.tts, 0.01);
+  const costRows = [
+    { label: 'LLM',      val: etappe.llm,      color: T.accent },
+    { label: 'ImageGen', val: etappe.imagegen,  color: '#9F6BF5' },
+    { label: 'Video',    val: etappe.video,     color: '#C2A4F8' },
+    { label: 'TTS',      val: etappe.tts,       color: '#DFCEFA' },
+  ];
+  const maxTiming = Math.max(...Object.values(etappe.timings), 1);
+  const runTime = etappe.run_at ? new Date(etappe.run_at).toLocaleString('de-AT', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '–';
+
+  // latest step per agent (same logic as TabProgress)
+  const grouped = {};
+  steps.forEach(s => { if (!grouped[s.step]) grouped[s.step] = []; grouped[s.step].push(s); });
+  const latestSteps = Object.values(grouped).map(arr => arr[arr.length - 1]);
+
+  return (
+    <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(20,16,28,0.45)', zIndex: 1000,
+      display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 24 }}>
+      <div onClick={e => e.stopPropagation()} style={{ background: T.surface, borderRadius: 16,
+        border: `1px solid ${T.border}`, width: '100%', maxWidth: 680, maxHeight: '90vh',
+        overflow: 'auto', boxShadow: '0 24px 64px rgba(20,16,28,0.18)' }}>
+
+        {/* Header */}
+        <div style={{ padding: '22px 24px 18px', borderBottom: `1px solid ${T.border}` }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
+            <div>
+              <div style={{ fontFamily: T.mono, fontSize: 10, color: T.accent, fontWeight: 600,
+                textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 6 }}>
+                TAG {etappe.n} · {etappe.datum}
+              </div>
+              <div style={{ fontFamily: T.serif, fontSize: 26, fontWeight: 400, color: T.ink, lineHeight: 1.1 }}>
+                {etappe.name}
+              </div>
+              {etappe.stimmung && (
+                <div style={{ fontSize: 12, color: T.muted, marginTop: 6, fontStyle: 'italic' }}>{etappe.stimmung}</div>
+              )}
+            </div>
+            <div style={{ display: 'flex', gap: 8, flexShrink: 0 }}>
+              <a href={`style-review.html?etappe_id=${etappe.id}`}
+                style={{ background: T.accentSoft, border: `1px solid ${T.border}`,
+                  borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontFamily: T.sans,
+                  fontSize: 12, color: T.accent, fontWeight: 600, textDecoration: 'none',
+                  display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+                <ISparkles size={12} sw={2} /> Style Review →
+              </a>
+              <button onClick={onClose} style={{ background: T.surfaceAlt, border: `1px solid ${T.border}`,
+                borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontFamily: T.sans,
+                fontSize: 12, color: T.muted, fontWeight: 500 }}>✕ Schließen</button>
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+            <Pill state={etappe.status} label={etappe.status} />
+            <span style={{ fontFamily: T.mono, fontSize: 11, color: T.mutedSoft, alignSelf: 'center' }}>Run: {runTime}</span>
+          </div>
+        </div>
+
+        <div style={{ padding: 24, display: 'flex', flexDirection: 'column', gap: 20 }}>
+          {/* KPI row */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
+            {[
+              { label: 'Kosten', value: `€${etappe.cost.toFixed(3)}`, sub: 'dieser Run' },
+              { label: 'Dauer',  value: etappe.dur ? `${etappe.dur}s` : '–', sub: etappe.dur ? `${Math.floor(etappe.dur/60)}:${String(etappe.dur%60).padStart(2,'0')} Min` : '' },
+              { label: 'Fotos',  value: String(etappe.photos_input || '–'), sub: `${etappe.photos_selected} ausgewählt · ${etappe.t2i} Bilder · ${etappe.clips} Clips` },
+            ].map(k => (
+              <div key={k.label} style={{ background: T.surfaceAlt, borderRadius: 10, padding: '14px 16px' }}>
+                <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 6 }}>{k.label}</div>
+                <div style={{ fontFamily: T.serif, fontSize: 28, fontWeight: 400, color: T.ink, lineHeight: 1 }}>{k.value}</div>
+                <div style={{ fontSize: 11, color: T.mutedSoft, marginTop: 4 }}>{k.sub}</div>
+              </div>
+            ))}
+          </div>
+
+          {/* Costs + Timings side by side */}
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, marginBottom: 12 }}>Kosten-Breakdown</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                {costRows.map(r => (
+                  <div key={r.label}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                      <span style={{ fontSize: 12, color: T.muted, display: 'flex', alignItems: 'center', gap: 6 }}>
+                        <span style={{ width: 8, height: 8, borderRadius: 2, background: r.color, display: 'inline-block' }} />
+                        {r.label}
+                      </span>
+                      <span style={{ fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>€{r.val.toFixed(3)}</span>
+                    </div>
+                    <div style={{ height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${(r.val / maxCost) * 100}%`, background: r.color, borderRadius: 3 }} />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, marginBottom: 12 }}>Agent-Timings</div>
+              {Object.keys(etappe.timings).length ? (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+                  {Object.entries(etappe.timings).map(([name, sec]) => (
+                    <div key={name}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
+                        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{name}</span>
+                        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 600 }}>{sec}s</span>
+                      </div>
+                      <div style={{ height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
+                        <div style={{ height: '100%', width: `${(sec / maxTiming) * 100}%`, background: T.accent, borderRadius: 3 }} />
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <div style={{ fontSize: 12, color: T.mutedSoft, fontStyle: 'italic' }}>Keine Timing-Daten</div>
+              )}
+            </div>
+          </div>
+
+          {/* Pipeline Steps */}
+          {latestSteps.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, marginBottom: 12 }}>Pipeline-Schritte</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+                {latestSteps.map((s, i) => (
+                  <StepRow key={i} step={s} isLast={i === latestSteps.length - 1} />
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Errors */}
+          {etappe.errors?.length > 0 && (
+            <div>
+              <div style={{ fontSize: 12, fontWeight: 600, color: T.err, marginBottom: 8 }}>Fehler</div>
+              {etappe.errors.map((err, i) => (
+                <div key={i} style={{ padding: '10px 14px', background: T.errSoft, borderRadius: 8,
+                  borderLeft: `3px solid ${T.err}`, marginBottom: 6, fontSize: 12, color: T.err }}>
+                  <strong>{err.agent}:</strong> {err.msg}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ─── Live Run Tab ─────────────────────────────────────────────────────────────
+const STEP_LABELS = {
+  analyst:   'Analyst · Foto-Analyse',
+  map:       'Map & Geolocator',
+  narrator:  'Narrator · Erzählung',
+  selektor:  'Selektor · Auswahl',
+  imagegen:  'ImageGen · KI-Bilder',
+  animator:  'Animator · KI-Clips',
+  audio:     'Audio · Voice-Over',
+  assembler: 'Assembler · Rendering',
+  publisher: 'Publisher · Veröffentlichen',
+};
+
+function StepRow({ step, isLast }) {
+  const statusStyle = {
+    running: { dot: T.accent, label: 'läuft…', bg: T.accentSoft, fg: T.accentInk },
+    done:    { dot: T.ok,     label: 'fertig',  bg: T.okSoft,     fg: T.ok },
+    error:   { dot: T.err,    label: 'Fehler',  bg: T.errSoft,    fg: T.err },
+    skipped: { dot: T.mutedSoft, label: 'übersprungen', bg: T.surfaceAlt, fg: T.muted },
+  }[step.status] || { dot: T.muted, label: step.status, bg: T.surfaceAlt, fg: T.muted };
+
+  const ts = step.ts ? new Date(step.ts).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+
+  return (
+    <div style={{ display: 'flex', gap: 16, position: 'relative' }}>
+      <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 20 }}>
+        <div style={{
+          width: 12, height: 12, borderRadius: '50%', background: statusStyle.dot,
+          flexShrink: 0, marginTop: 4,
+          boxShadow: step.status === 'running' ? `0 0 0 4px ${T.accentSoft}` : 'none',
+        }} />
+        {!isLast && <div style={{ width: 2, flex: 1, background: T.border, marginTop: 4 }} />}
+      </div>
+      <div style={{ flex: 1, paddingBottom: isLast ? 0 : 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: step.detail ? 4 : 0 }}>
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>
+            {STEP_LABELS[step.step] || step.step}
+          </span>
+          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px',
+            background: statusStyle.bg, color: statusStyle.fg,
+            fontFamily: T.mono, fontSize: 10, fontWeight: 600, borderRadius: 4 }}>
+            {statusStyle.label}
+          </span>
+          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.mutedSoft, marginLeft: 'auto' }}>{ts}</span>
+        </div>
+        {step.detail && (
+          <div style={{ fontSize: 12, color: T.muted, fontFamily: T.mono }}>{step.detail}</div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function TabProgress({ steps, onRefresh }) {
+  const { useState: useS, useEffect: useE } = React;
+  const [tick, setTick] = useS(0);
+  const isRunning = steps.some(s => s.status === 'running');
+
+  useE(() => {
+    if (!isRunning) return;
+    const iv = setInterval(() => setTick(t => t + 1), 1000);
+    return () => clearInterval(iv);
+  }, [isRunning]);
+
+  const grouped = {};
+  steps.forEach(s => {
+    if (!grouped[s.step]) grouped[s.step] = [];
+    grouped[s.step].push(s);
+  });
+
+  // Letzte Zeile pro Step (done überschreibt running etc.)
+  const latest = Object.values(grouped).map(arr => arr[arr.length - 1]);
+
+  if (!steps.length) return (
+    <Panel style={{ textAlign: 'center', padding: 48 }}>
+      <IActivity size={32} style={{ color: T.mutedSoft, marginBottom: 12 }} sw={1.5} />
+      <div style={{ fontFamily: T.serif, fontSize: 20, color: T.muted, marginBottom: 8 }}>Kein aktiver Run</div>
+      <div style={{ fontSize: 13, color: T.mutedSoft }}>Sobald die Pipeline startet, erscheinen hier die Schritte live.</div>
+    </Panel>
+  );
+
+  const lastStep = latest[latest.length - 1];
+  const doneCount = latest.filter(s => s.status === 'done').length;
+  const total = latest.length;
+  const pct = total ? Math.round((doneCount / total) * 100) : 0;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <Panel>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <IActivity size={15} style={{ color: T.accent }} sw={2} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Laufender Run</span>
+            {isRunning && (
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 9px',
+                background: T.accentSoft, color: T.accentInk,
+                fontFamily: T.mono, fontSize: 10, fontWeight: 700, borderRadius: 4, letterSpacing: 0.4 }}>
+                ● LIVE
+              </span>
+            )}
+          </div>
+          <button onClick={onRefresh} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '6px 12px',
+            background: T.surfaceAlt, border: `1px solid ${T.border}`, borderRadius: 7, cursor: 'pointer',
+            fontFamily: T.sans, fontSize: 12, color: T.muted, fontWeight: 500 }}>
+            <IRefresh size={12} sw={2} /> Aktualisieren
+          </button>
+        </div>
+
+        <div style={{ marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+            <span style={{ fontSize: 12, color: T.muted, fontWeight: 500 }}>{doneCount} / {total} Schritte</span>
+            <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 600 }}>{pct}%</span>
+          </div>
+          <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
+            <div style={{ height: '100%', width: `${pct}%`,
+              background: `linear-gradient(90deg, ${T.accent}, ${T.accentDeep})`,
+              borderRadius: 4, transition: 'width 0.4s ease' }} />
+          </div>
+        </div>
+
+        <div>
+          {latest.map((s, i) => (
+            <StepRow key={`${s.step}-${i}`} step={s} isLast={i === latest.length - 1} />
+          ))}
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 // ─── Time scope switcher ──────────────────────────────────────────────────────
 function ScopeSwitcher({ scope, onChange }) {
   return (
@@ -748,18 +1106,21 @@ function ScopeSwitcher({ scope, onChange }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'uebersicht',  label: 'Übersicht',  Icon: IDash,    Content: TabUebersicht },
-  { id: 'kosten',      label: 'Kosten',     Icon: ICoins,   Content: TabKosten },
-  { id: 'performance', label: 'Performance',Icon: IGauge,   Content: TabPerformance },
-  { id: 'reliability', label: 'Reliability',Icon: IShield,  Content: TabReliability },
+  { id: 'uebersicht',  label: 'Übersicht',  Icon: IDash,     Content: TabUebersicht },
+  { id: 'kosten',      label: 'Kosten',     Icon: ICoins,    Content: TabKosten },
+  { id: 'performance', label: 'Performance',Icon: IGauge,    Content: TabPerformance },
+  { id: 'reliability', label: 'Reliability',Icon: IShield,   Content: TabReliability },
+  { id: 'liverun',     label: 'Live Run',   Icon: IActivity, Content: null },
 ];
 
 function App() {
-  const [tab, setTab]       = useState('uebersicht');
-  const [scope, setScope]   = useState('Heute');
-  const [data, setData]     = useState(null);
+  const [tab, setTab]         = useState('uebersicht');
+  const [scope, setScope]     = useState('Heute');
+  const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
+  const [steps, setSteps]     = useState([]);
+  const [runEtappeId, setRunEtappeId] = useState(null);
 
   React.useEffect(() => {
     fetchEtappen()
@@ -767,6 +1128,23 @@ function App() {
       .catch(e  => setLoadError(e.message))
       .finally(() => setLoading(false));
   }, []);
+
+  const loadSteps = React.useCallback((eid) => {
+    fetchSteps(eid).then(setSteps);
+  }, []);
+
+  React.useEffect(() => {
+    fetchLatestRun().then(eid => {
+      if (eid) { setRunEtappeId(eid); loadSteps(eid); }
+    });
+  }, []);
+
+  const isRunning = steps.some(s => s.status === 'running');
+  React.useEffect(() => {
+    if (!isRunning || !runEtappeId) return;
+    const iv = setInterval(() => loadSteps(runEtappeId), 5000);
+    return () => clearInterval(iv);
+  }, [isRunning, runEtappeId]);
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', fontFamily: T.sans, color: T.muted, fontSize: 14 }}>
@@ -810,7 +1188,7 @@ function App() {
           </div>
           <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 20 }}>
             <h1 style={{ fontFamily: T.serif, fontSize: 34, fontWeight: 400, margin: 0, letterSpacing: -0.6, lineHeight: 1.05, whiteSpace: 'nowrap' }}>
-              {data.name.replace('→', '')} <span style={{ color: T.accent, fontStyle: 'italic' }}>→</span> {data.name.split('→')[1]?.trim()}
+              {data.name.split('→')[0].trim()} <span style={{ color: T.accent, fontStyle: 'italic' }}>→</span> {data.name.split('→')[1]?.trim()}
             </h1>
             <ScopeSwitcher scope={scope} onChange={setScope} />
           </div>
@@ -834,13 +1212,31 @@ function App() {
 
       {/* Scrollable content */}
       <div style={{ flex: 1, overflow: 'auto', padding: '24px 28px' }}>
-        <active.Content />
+        {tab === 'liverun'
+          ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} />
+          : <active.Content data={data} />
+        }
       </div>
     </div>
   );
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+class ErrorBoundary extends React.Component {
+  constructor(p) { super(p); this.state = { err: null }; }
+  static getDerivedStateFromError(e) { return { err: e }; }
+  render() {
+    if (this.state.err) return (
+      <div style={{ padding: 32, fontFamily: 'monospace', fontSize: 13, color: '#B91C1C', background: '#FFF1F1', minHeight: '100vh' }}>
+        <strong>Render-Fehler (bitte screenshot):</strong><br/><br/>
+        {this.state.err.message}<br/><br/>
+        <pre style={{ fontSize: 11, color: '#666', whiteSpace: 'pre-wrap' }}>{this.state.err.stack}</pre>
+      </div>
+    );
+    return this.props.children;
+  }
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);
 </script>
 </body>
 </html>
