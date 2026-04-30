@@ -577,51 +577,6 @@ function TabUebersicht({ data, selectedEtappe }) {
           </div>
         </div>
       </Panel>
-
-      {/* Style Review CTA */}
-      {latestE && (
-        <div style={{
-          background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12,
-          padding: mobile ? 16 : 20,
-          display: 'flex', alignItems: mobile ? 'flex-start' : 'center',
-          justifyContent: 'space-between', gap: 16,
-          flexDirection: mobile ? 'column' : 'row',
-        }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-            <div style={{
-              width: 44, height: 44, borderRadius: 12, flexShrink: 0,
-              background: `linear-gradient(135deg, ${T.accent}22, ${T.accentDeep}15)`,
-              border: `1px solid ${T.accent}30`,
-              display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.accent,
-            }}>
-              <ISparkles size={20} sw={1.8} />
-            </div>
-            <div>
-              <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, marginBottom: 3 }}>Style Review</div>
-              <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.4 }}>
-                {latestE.t2i > 0
-                  ? `${latestE.t2i} generierte Bilder für T${latestE.n} · ${latestE.name}`
-                  : `KI-Bilder für T${latestE.n} · ${latestE.name} bewerten`}
-              </div>
-            </div>
-          </div>
-          <a
-            href={`style-review.html?etappe_id=${latestE.id}`}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
-              padding: '10px 20px', borderRadius: 9,
-              background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`,
-              color: '#fff', textDecoration: 'none',
-              fontFamily: T.sans, fontSize: 13, fontWeight: 600,
-              boxShadow: `0 4px 14px ${T.accent}33`,
-              whiteSpace: 'nowrap',
-            }}
-          >
-            <ISparkles size={13} sw={2} />
-            Style Review →
-          </a>
-        </div>
-      )}
     </div>
   );
 }
@@ -1380,6 +1335,196 @@ function TabProgress({ steps, onRefresh, latestEtappe }) {
   );
 }
 
+// ─── Image card (inline, for Style Review tab) ──────────────────────────────────────
+function ImageCardInline({ foto }) {
+  const [state, setState] = React.useState('loading');
+  const imgSrc = foto.bildgen_url
+    ? foto.bildgen_url
+    : foto.bildgen_datei
+      ? 'file://' + foto.bildgen_datei.split('/').map(seg => encodeURIComponent(seg)).join('/')
+      : null;
+
+  return (
+    <div style={{ borderRadius: 10, overflow: 'hidden', background: T.surfaceAlt,
+      border: `1px solid ${T.border}`, position: 'relative', aspectRatio: '9 / 16' }}>
+      {state !== 'ok' && (
+        <div style={{ position: 'absolute', inset: 0, display: 'flex', flexDirection: 'column',
+          alignItems: 'center', justifyContent: 'center', gap: 8, padding: 12 }}>
+          {state === 'loading' && <span style={{ fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>Laden…</span>}
+          {state === 'error' && (
+            <>
+              <IImage size={24} style={{ color: T.mutedSoft }} sw={1.5} />
+              <span style={{ fontFamily: T.mono, fontSize: 9, color: T.mutedSoft, textAlign: 'center',
+                wordBreak: 'break-all', padding: '0 4px' }}>{foto.foto_nr}</span>
+            </>
+          )}
+        </div>
+      )}
+      {imgSrc && (
+        <img src={imgSrc} alt={foto.foto_nr}
+          onLoad={() => setState('ok')}
+          onError={() => setState('error')}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', display: state === 'ok' ? 'block' : 'none' }} />
+      )}
+      <div style={{ position: 'absolute', bottom: 0, left: 0, right: 0,
+        padding: '20px 8px 7px',
+        background: 'linear-gradient(transparent, rgba(20,16,28,0.72))',
+        fontFamily: T.mono, fontSize: 9, color: 'rgba(255,255,255,0.75)', letterSpacing: 0.3 }}>
+        {foto.foto_nr}
+      </div>
+    </div>
+  );
+}
+
+// ─── Style Review Tab (inline) ─────────────────────────────────────────────────────────
+const STYLE_RATINGS = [
+  { value: 1, emoji: '🔄', label: 'Nochmal', color: T.warn,   bg: T.warnSoft,   border: '#92400E' },
+  { value: 2, emoji: '👍', label: 'Gut',     color: T.accent, bg: T.accentSoft, border: T.accentDeep },
+  { value: 3, emoji: '🔥', label: 'Top',     color: T.ok,     bg: T.okSoft,     border: '#166534' },
+];
+
+function TabStyleReview({ data, selectedEtappe }) {
+  const mobile = useMobile();
+  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
+
+  const [detail, setDetail]   = React.useState(null);
+  const [fotos, setFotos]     = React.useState([]);
+  const [loading, setLoading] = React.useState(false);
+  const [rating, setRating]   = React.useState(null);
+  const [notiz, setNotiz]     = React.useState('');
+  const [saving, setSaving]   = React.useState(false);
+  const [saveMsg, setSaveMsg] = React.useState(null);
+
+  React.useEffect(() => {
+    if (!curE?.id) return;
+    setLoading(true); setDetail(null); setFotos([]); setRating(null); setNotiz(''); setSaveMsg(null);
+    const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
+    Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}&select=id,reel_stil,erzaehl_stimmung,stil_bewertung,stil_notiz&limit=1`, { headers: h }).then(r => r.json()).then(rows => rows[0] || null),
+      fetch(`${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${curE.id}&bildgen_datei=not.is.null&select=foto_nr,bildgen_datei,bildgen_url,tagesstil&order=foto_nr.asc`, { headers: h }).then(r => r.json()),
+    ]).then(([det, f]) => {
+      setDetail(det);
+      setFotos(f);
+      if (det?.stil_bewertung) setRating(det.stil_bewertung);
+      if (det?.stil_notiz)     setNotiz(det.stil_notiz);
+    }).finally(() => setLoading(false));
+  }, [curE?.id]);
+
+  async function handleSave() {
+    if (!curE || rating === null || saving) return;
+    setSaving(true); setSaveMsg(null);
+    try {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}`, {
+        method: 'PATCH',
+        headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' },
+        body: JSON.stringify({ stil_bewertung: rating, stil_notiz: notiz || null }),
+      });
+      if (!res.ok) throw new Error(`${res.status}`);
+      setSaveMsg({ text: '✓ Bewertung gespeichert', type: 'ok' });
+      setTimeout(() => setSaveMsg(null), 4000);
+    } catch (err) {
+      setSaveMsg({ text: `Fehler: ${err.message}`, type: 'error' });
+    } finally { setSaving(false); }
+  }
+
+  if (!curE) return null;
+  const stilName = fotos.length > 0 ? (fotos[0].tagesstil || detail?.reel_stil || '–') : (detail?.reel_stil || '–');
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+
+      {/* Stil-Header */}
+      <Panel>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 6 }}>
+          <div style={{ width: 4, height: 44, background: T.accent, borderRadius: 2, flexShrink: 0 }} />
+          <div>
+            <div style={{ fontFamily: T.mono, fontSize: 10, color: T.muted, fontWeight: 500,
+              textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>Stil</div>
+            <div style={{ fontFamily: T.serif, fontSize: mobile ? 24 : 32, color: T.ink, lineHeight: 1 }}>
+              {loading ? '…' : stilName}
+            </div>
+          </div>
+        </div>
+        {(curE.stimmung || detail?.erzaehl_stimmung) && (
+          <div style={{ marginLeft: 18, fontFamily: T.sans, fontSize: 13, color: T.muted,
+            fontStyle: 'italic', marginTop: 8, lineHeight: 1.5 }}>
+            {curE.stimmung || detail?.erzaehl_stimmung}
+          </div>
+        )}
+        <div style={{ marginLeft: 18, marginTop: 8, fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>
+          {loading ? 'Lade Bilder…' : `${fotos.length} generierte Bilder`}
+        </div>
+      </Panel>
+
+      {/* Bildergalerie */}
+      {fotos.length > 0 ? (
+        <div style={{ display: 'grid',
+          gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(auto-fill, minmax(190px, 1fr))',
+          gap: 12 }}>
+          {fotos.map(foto => <ImageCardInline key={foto.foto_nr} foto={foto} />)}
+        </div>
+      ) : !loading ? (
+        <Panel style={{ textAlign: 'center', padding: 48 }}>
+          <IImage size={32} style={{ color: T.mutedSoft, marginBottom: 12 }} sw={1.5} />
+          <div style={{ fontFamily: T.serif, fontSize: 18, color: T.muted, marginBottom: 6 }}>Keine generierten Bilder</div>
+          <div style={{ fontSize: 13, color: T.mutedSoft }}>für diese Etappe verfügbar</div>
+        </Panel>
+      ) : null}
+
+      {/* Bewertung */}
+      <Panel>
+        <PanelHeader icon={ISparkles} label="Bewertung" serif="Wie war der Stil?" />
+        <div style={{ display: 'flex', gap: mobile ? 8 : 12, flexWrap: 'wrap', marginBottom: 20 }}>
+          {STYLE_RATINGS.map(r => (
+            <button key={r.value} onClick={() => setRating(r.value)} style={{
+              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
+              padding: mobile ? '12px 20px' : '14px 32px', cursor: 'pointer', borderRadius: 12,
+              border: `2px solid ${rating === r.value ? r.border : T.border}`,
+              background: rating === r.value ? r.bg : T.surface,
+              transform: rating === r.value ? 'translateY(-2px)' : 'none',
+              boxShadow: rating === r.value ? `0 4px 16px ${r.bg}` : 'none',
+              transition: 'all 0.15s ease', minWidth: mobile ? 90 : 110, flex: mobile ? 1 : 'none',
+            }}>
+              <span style={{ fontSize: mobile ? 24 : 30, lineHeight: 1 }}>{r.emoji}</span>
+              <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 600, letterSpacing: 0.2,
+                color: rating === r.value ? r.color : T.muted, textTransform: 'uppercase' }}>{r.label}</span>
+            </button>
+          ))}
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <div style={{ fontSize: 11, fontWeight: 600, color: T.mutedSoft,
+            textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>Notiz (optional)</div>
+          <textarea value={notiz} onChange={e => setNotiz(e.target.value)}
+            placeholder="Anmerkung zum Stil…" rows={3}
+            style={{ width: '100%', fontFamily: T.sans, fontSize: 13, color: T.ink,
+              background: T.surfaceAlt, border: `1px solid ${T.border}`,
+              borderRadius: 8, padding: '10px 12px', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
+          {saveMsg ? (
+            <div style={{ padding: '8px 14px', borderRadius: 8, fontFamily: T.sans, fontSize: 12, fontWeight: 500,
+              background: saveMsg.type === 'ok' ? T.okSoft : T.errSoft,
+              color: saveMsg.type === 'ok' ? T.ok : T.err,
+              border: `1px solid ${saveMsg.type === 'ok' ? '#166534' : T.err}` }}>
+              {saveMsg.text}
+            </div>
+          ) : <div />}
+          <button onClick={handleSave} disabled={saving || rating === null} style={{
+            fontFamily: T.sans, fontSize: 14, fontWeight: 600,
+            padding: '12px 28px', borderRadius: 10, border: 'none',
+            background: rating !== null && !saving ? T.accent : T.surfaceAlt,
+            color: rating !== null && !saving ? '#fff' : T.mutedSoft,
+            cursor: rating !== null && !saving ? 'pointer' : 'not-allowed',
+            opacity: saving ? 0.7 : 1, transition: 'background 0.15s',
+          }}>
+            {saving ? 'Speichern…' : 'Bewertung speichern'}
+          </button>
+        </div>
+      </Panel>
+    </div>
+  );
+}
+
 // ─── Time scope switcher ──────────────────────────────────────────────────────
 function ScopeSwitcher({ scope, onChange }) {
   return (
@@ -1398,10 +1543,11 @@ function ScopeSwitcher({ scope, onChange }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 const TABS = [
-  { id: 'uebersicht',  label: 'Übersicht',  Icon: IDash,     Content: TabUebersicht },
-  { id: 'kosten',      label: 'Kosten',     Icon: ICoins,    Content: TabKosten },
-  { id: 'performance', label: 'Performance',Icon: IGauge,    Content: TabPerformance },
-  { id: 'reliability', label: 'Reliability',Icon: IShield,   Content: TabReliability },
+  { id: 'uebersicht',  label: 'Übersicht',   Icon: IDash,      Content: TabUebersicht },
+  { id: 'kosten',      label: 'Kosten',      Icon: ICoins,     Content: TabKosten },
+  { id: 'performance', label: 'Performance', Icon: IGauge,     Content: TabPerformance },
+  { id: 'reliability', label: 'Reliability', Icon: IShield,    Content: TabReliability },
+  { id: 'stylereview', label: 'Style Review',Icon: ISparkles,  Content: TabStyleReview },
 ];
 
 function App() {
