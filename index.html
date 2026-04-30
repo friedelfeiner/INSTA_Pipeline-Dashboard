@@ -577,6 +577,51 @@ function TabUebersicht({ data, selectedEtappe }) {
           </div>
         </div>
       </Panel>
+
+      {/* Style Review CTA */}
+      {latestE && (
+        <div style={{
+          background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12,
+          padding: mobile ? 16 : 20,
+          display: 'flex', alignItems: mobile ? 'flex-start' : 'center',
+          justifyContent: 'space-between', gap: 16,
+          flexDirection: mobile ? 'column' : 'row',
+        }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+            <div style={{
+              width: 44, height: 44, borderRadius: 12, flexShrink: 0,
+              background: `linear-gradient(135deg, ${T.accent}22, ${T.accentDeep}15)`,
+              border: `1px solid ${T.accent}30`,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.accent,
+            }}>
+              <ISparkles size={20} sw={1.8} />
+            </div>
+            <div>
+              <div style={{ fontSize: 13, fontWeight: 600, color: T.ink, marginBottom: 3 }}>Style Review</div>
+              <div style={{ fontSize: 12, color: T.muted, lineHeight: 1.4 }}>
+                {latestE.t2i > 0
+                  ? `${latestE.t2i} generierte Bilder für T${latestE.n} · ${latestE.name}`
+                  : `KI-Bilder für T${latestE.n} · ${latestE.name} bewerten`}
+              </div>
+            </div>
+          </div>
+          <a
+            href={`style-review.html?etappe_id=${latestE.id}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 7, flexShrink: 0,
+              padding: '10px 20px', borderRadius: 9,
+              background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`,
+              color: '#fff', textDecoration: 'none',
+              fontFamily: T.sans, fontSize: 13, fontWeight: 600,
+              boxShadow: `0 4px 14px ${T.accent}33`,
+              whiteSpace: 'nowrap',
+            }}
+          >
+            <ISparkles size={13} sw={2} />
+            Style Review →
+          </a>
+        </div>
+      )}
     </div>
   );
 }
@@ -1352,109 +1397,11 @@ function ScopeSwitcher({ scope, onChange }) {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-// ─── Style Review Tab ─────────────────────────────────────────────────────────
-function TabStyleReview({ data, selectedEtappe }) {
-  const mobile = useMobile();
-  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
-
-  const withReview = data.etappenList.filter(e => e.run_at);
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{
-        background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20,
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
-          <ISparkles size={15} style={{ color: T.accent }} sw={2} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Style Review</span>
-        </div>
-        <div style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, lineHeight: 1.2, color: T.ink, marginBottom: 6 }}>
-          KI-Bilder bewerten
-        </div>
-        <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.5, marginBottom: 18 }}>
-          Hier kannst du die generierten KI-Bilder jeder Etappe bewerten. Klicke auf eine Etappe, um direkt zum Style Review zu gelangen.
-        </div>
-        {curE && (
-          <a
-            href={`style-review.html?etappe_id=${curE.id}`}
-            style={{
-              display: 'inline-flex', alignItems: 'center', gap: 8,
-              padding: '10px 20px', borderRadius: 10,
-              background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`,
-              color: '#fff', textDecoration: 'none',
-              fontFamily: T.sans, fontSize: 13, fontWeight: 600,
-              boxShadow: `0 4px 14px ${T.accent}44`,
-              transition: 'opacity 0.15s',
-            }}
-          >
-            <ISparkles size={13} sw={2} />
-            Style Review · T{curE.n} {curE.name}
-          </a>
-        )}
-      </div>
-
-      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
-          <IImage size={15} style={{ color: T.accent }} sw={2} />
-          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Alle Etappen</span>
-          <span style={{ marginLeft: 'auto', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>{withReview.length} mit Daten</span>
-        </div>
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-          {[...data.etappenList].reverse().map((e, i) => (
-            <a
-              key={e.id}
-              href={`style-review.html?etappe_id=${e.id}`}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 14,
-                padding: '12px 0',
-                borderBottom: i < data.etappenList.length - 1 ? `1px solid ${T.border}` : 'none',
-                textDecoration: 'none', color: 'inherit',
-                transition: 'background 0.1s',
-              }}
-              onMouseEnter={ev => ev.currentTarget.style.background = T.surfaceAlt}
-              onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}
-            >
-              <div style={{
-                width: 34, height: 34, borderRadius: 8, flexShrink: 0,
-                background: e.id === curE?.id ? T.accentSoft : T.surfaceAlt,
-                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                fontFamily: T.mono, fontSize: 11, color: e.id === curE?.id ? T.accentInk : T.muted, fontWeight: 600,
-              }}>T{e.n}</div>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 13, color: T.ink, fontWeight: e.id === curE?.id ? 600 : 400,
-                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                  {e.name}
-                </div>
-                {e.stimmung && (
-                  <div style={{ fontSize: 11, color: T.mutedSoft, fontStyle: 'italic', marginTop: 2,
-                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                    {e.stimmung}
-                  </div>
-                )}
-              </div>
-              <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
-                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>{e.datum?.slice(5)}</span>
-                <span style={{
-                  display: 'inline-flex', alignItems: 'center', gap: 4,
-                  padding: '3px 8px', borderRadius: 6,
-                  background: T.accentSoft, color: T.accentInk,
-                  fontFamily: T.sans, fontSize: 11, fontWeight: 600,
-                }}>→</span>
-              </div>
-            </a>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 const TABS = [
-  { id: 'uebersicht',  label: 'Übersicht',  Icon: IDash,       Content: TabUebersicht },
-  { id: 'kosten',      label: 'Kosten',     Icon: ICoins,      Content: TabKosten },
-  { id: 'performance', label: 'Performance',Icon: IGauge,      Content: TabPerformance },
-  { id: 'reliability', label: 'Reliability',Icon: IShield,     Content: TabReliability },
-  { id: 'stylereview', label: 'Style Review',Icon: ISparkles,  Content: TabStyleReview },
+  { id: 'uebersicht',  label: 'Übersicht',  Icon: IDash,     Content: TabUebersicht },
+  { id: 'kosten',      label: 'Kosten',     Icon: ICoins,    Content: TabKosten },
+  { id: 'performance', label: 'Performance',Icon: IGauge,    Content: TabPerformance },
+  { id: 'reliability', label: 'Reliability',Icon: IShield,   Content: TabReliability },
 ];
 
 function App() {
