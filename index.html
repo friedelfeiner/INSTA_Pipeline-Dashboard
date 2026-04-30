@@ -174,6 +174,7 @@ function transformData(rows, routeMap = {}) {
     clips:    e.video_count || 0,
     retries:  Object.values(e.retries || {}).reduce((a, b) => a + b, 0),
     errors:   e.errors || [],
+    publishedPlatforms: e.published_platforms || [],
   }));
 
   const trend28 = valid.slice(0, 28).map(e => e.cost_total_eur || 0).reverse();
@@ -407,7 +408,7 @@ function AgentBar({ name, seconds, maxSec = 520 }) {
     <div>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6 }}>
         <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 500 }}>{name}</span>
-        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{seconds}<span style={{ color: T.mutedSoft }}>s</span></span>
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{fmtDur(seconds)}</span>
       </div>
       <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
         <div style={{ height: '100%', width: `${pct}%`,
@@ -457,12 +458,18 @@ function TrendBadge({ dir, val }) {
 // ─── Tab content ──────────────────────────────────────────────────────────────
 function TabUebersicht({ data, selectedEtappe }) {
   const mobile = useMobile();
-  const ct = data.costs.total || 1;
-  const costPct = k => ct > 0 ? Math.round((data.costs[k] / ct) * 100) : 0;
-  const dur = data.duration;
-  const maxAgentSec = Math.max(dur.analyst, dur.narrator, dur.imagegen, dur.animator, dur.tts, 1);
-
   const latestE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
+  const ct = latestE?.cost || 1;
+  const costPct = k => ct > 0 ? Math.round(((latestE?.[k] || 0) / ct) * 100) : 0;
+  const dur = {
+    total:    latestE?.dur                  || 0,
+    analyst:  latestE?.timings?.analyst  || 0,
+    narrator: latestE?.timings?.narrator || 0,
+    imagegen: latestE?.timings?.imagegen || 0,
+    animator: latestE?.timings?.animator || 0,
+    tts:      latestE?.timings?.tts      || 0,
+  };
+  const maxAgentSec = Math.max(dur.analyst, dur.narrator, dur.imagegen, dur.animator, dur.tts, 1);
   const currentRoute = latestE?.route || '';
   const routeDurEtappen = data.etappenList.filter(e => (!currentRoute || e.route === currentRoute) && e.dur > 0);
   const avgDurRoute = routeDurEtappen.length
@@ -476,29 +483,29 @@ function TabUebersicht({ data, selectedEtappe }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 14 }}>
         <KPI icon={IEuro}    label="Kosten (Run)"
-          value={`€${data.costs.total.toFixed(2)}`}
+          value={`€${(latestE?.cost || 0).toFixed(2)}`}
           sub={`Ø €${avgCostRoute.toFixed(2)} · Σ €${data.tripTotal.toFixed(2)}${data.tripKuerzel ? ' · ' + data.tripKuerzel : ''}`} />
         <KPI icon={IClock}   label="Dauer (Run)"
           value={dur.total ? fmtDur(dur.total) : '–'}
           sub={avgDurRoute ? `Ø ${fmtDur(avgDurRoute)}${data.tripKuerzel ? ' · ' + data.tripKuerzel : ''} · ${routeDurEtappen.length} Etappen` : 'Keine Daten'} />
         <KPI icon={IRefresh} label="Retries"
-          value={String(data.retriesTotal)}
-          sub={data.errors?.length ? `${data.errors.length} Fehler · bitte prüfen` : 'alle resolved'} />
-        <PublishedKPI platforms={data.publishedPlatforms} />
+          value={String(latestE?.retries ?? 0)}
+          sub={latestE?.errors?.length ? `${latestE.errors.length} Fehler · bitte prüfen` : 'alle resolved'} />
+        <PublishedKPI platforms={latestE?.publishedPlatforms || []} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1.1fr 1fr', gap: 14 }}>
         <Panel>
           <PanelHeader icon={ICoins} label="Kosten-Breakdown" serif="Wo geht das Geld hin?"
             right={<div style={{ textAlign: 'right' }}>
-              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>€{data.costs.total.toFixed(2)}</div>
+              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>€{(latestE?.cost || 0).toFixed(2)}</div>
               <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>dieser Run</div>
             </div>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <CostBar name="LLM"      value={`€${data.costs.llm.toFixed(2)}`}      pct={costPct('llm')}      color={T.accent} />
-            <CostBar name="ImageGen" value={`€${data.costs.imagegen.toFixed(2)}`} pct={costPct('imagegen')} color="#9F6BF5" />
-            <CostBar name="Video"    value={`€${data.costs.video.toFixed(2)}`}     pct={costPct('video')}    color="#C2A4F8" />
-            <CostBar name="TTS"      value={`€${data.costs.tts.toFixed(2)}`}       pct={costPct('tts')}      color="#DFCEFA" />
+            <CostBar name="LLM"      value={`€${(latestE?.llm || 0).toFixed(2)}`}      pct={costPct('llm')}      color={T.accent} />
+            <CostBar name="ImageGen" value={`€${(latestE?.imagegen || 0).toFixed(2)}`} pct={costPct('imagegen')} color="#9F6BF5" />
+            <CostBar name="Video"    value={`€${(latestE?.video || 0).toFixed(2)}`}     pct={costPct('video')}    color="#C2A4F8" />
+            <CostBar name="TTS"      value={`€${(latestE?.tts || 0).toFixed(2)}`}       pct={costPct('tts')}      color="#DFCEFA" />
           </div>
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -512,7 +519,7 @@ function TabUebersicht({ data, selectedEtappe }) {
         <Panel>
           <PanelHeader icon={IGauge} label="Dauer pro Agent" serif="Wer bremst?"
             right={<div style={{ textAlign: 'right' }}>
-              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>{dur.total || '–'}<span style={{ fontSize: 14, color: T.muted }}>s</span></div>
+              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>{dur.total ? fmtDur(dur.total) : '–'}</div>
               <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>Σ Gesamtdauer</div>
             </div>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
@@ -580,8 +587,9 @@ function TabKosten({ data, selectedEtappe }) {
   const [sortDir, setSortDir] = React.useState('asc');
   const [selected, setSelected] = React.useState(null);
 
-  const ct = data.costs.total || 1;
-  const costPct = k => ct > 0 ? Math.round((data.costs[k] / ct) * 100) : 0;
+  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
+  const ct = curE?.cost || 1;
+  const costPct = k => ct > 0 ? Math.round(((curE?.[k] || 0) / ct) * 100) : 0;
   const withCost = data.etappenList.filter(e => e.cost > 0);
   const teuerste = withCost.length ? withCost.reduce((max, e) => e.cost > max.cost ? e : max) : null;
 
@@ -618,7 +626,7 @@ function TabKosten({ data, selectedEtappe }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 14 }}>
-        <KPI icon={IEuro} label="Kosten (letzter Run)" value={`€${data.costs.total.toFixed(2)}`} sub="dieser Run" />
+        <KPI icon={IEuro} label="Kosten (gewählter Run)" value={`€${(curE?.cost || 0).toFixed(2)}`} sub="dieser Run" />
         <KPI icon={IEuro} label={`Kosten${data.tripKuerzel ? ' ' + data.tripKuerzel : ' Reise'}`} value={`€${data.tripTotal.toFixed(2)}`} sub={`${data.tripEtappenCount} Runs · Ø €${data.tripEtappenCount ? (data.tripTotal / data.tripEtappenCount).toFixed(2) : '–'}`} />
         <KPI icon={IEuro} label="Teuerste Etappe" value={teuerste ? `€${teuerste.cost.toFixed(2)}` : '–'} sub={teuerste ? `${teuerste.kuerzel || ''} T${teuerste.n} · ${teuerste.name}`.trim() : 'Keine Daten'} />
       </div>
@@ -636,10 +644,10 @@ function TabKosten({ data, selectedEtappe }) {
         <Panel>
           <PanelHeader icon={ICoins} label="Breakdown heute" serif="Pro Kategorie" />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <CostBar name="LLM"      value={`€${data.costs.llm.toFixed(2)}`}      pct={costPct('llm')}      color={T.accent} />
-            <CostBar name="ImageGen" value={`€${data.costs.imagegen.toFixed(2)}`} pct={costPct('imagegen')} color="#9F6BF5" />
-            <CostBar name="Video"    value={`€${data.costs.video.toFixed(2)}`}     pct={costPct('video')}    color="#C2A4F8" />
-            <CostBar name="TTS"      value={`€${data.costs.tts.toFixed(2)}`}       pct={costPct('tts')}      color="#DFCEFA" />
+            <CostBar name="LLM"      value={`€${(curE?.llm || 0).toFixed(2)}`}      pct={costPct('llm')}      color={T.accent} />
+            <CostBar name="ImageGen" value={`€${(curE?.imagegen || 0).toFixed(2)}`} pct={costPct('imagegen')} color="#9F6BF5" />
+            <CostBar name="Video"    value={`€${(curE?.video || 0).toFixed(2)}`}     pct={costPct('video')}    color="#C2A4F8" />
+            <CostBar name="TTS"      value={`€${(curE?.tts || 0).toFixed(2)}`}       pct={costPct('tts')}      color="#DFCEFA" />
           </div>
           <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
             <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 10 }}>Anteil pro Kategorie</div>
@@ -712,7 +720,15 @@ function TabKosten({ data, selectedEtappe }) {
 
 function TabPerformance({ data, selectedEtappe }) {
   const mobile = useMobile();
-  const dur = data.duration;
+  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
+  const dur = {
+    total:    curE?.dur                  || 0,
+    analyst:  curE?.timings?.analyst  || 0,
+    narrator: curE?.timings?.narrator || 0,
+    imagegen: curE?.timings?.imagegen || 0,
+    animator: curE?.timings?.animator || 0,
+    tts:      curE?.timings?.tts      || 0,
+  };
   const totalSec = dur.total || 1;
   const withDur = data.etappenList.filter(e => e.dur > 0);
   const avgDur = withDur.length ? Math.round(withDur.reduce((s, e) => s + e.dur, 0) / withDur.length) : 0;
@@ -723,16 +739,16 @@ function TabPerformance({ data, selectedEtappe }) {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 14 }}>
-        <KPI icon={IClock} label="Gesamtdauer" value={dur.total ? `${dur.total}s` : '–'} sub={dur.total ? fmtDur(dur.total) : 'Keine Daten'} />
-        <KPI icon={IClock} label="Ø über Reise" value={avgDur ? `${avgDur}s` : '–'} sub={`${withDur.length} Etappen mit Daten`} />
-        <KPI icon={IClock} label="Langsamster Agent" value={dur[slowest] ? slowest : '–'} sub={dur[slowest] ? `${dur[slowest]}s · ${Math.round((dur[slowest] / totalSec) * 100)}% der Laufzeit` : 'Keine Daten'} />
+        <KPI icon={IClock} label="Gesamtdauer" value={dur.total ? fmtDur(dur.total) : '–'} sub={dur.total ? `${dur.total}s` : 'Keine Daten'} />
+        <KPI icon={IClock} label="Ø über Reise" value={avgDur ? fmtDur(avgDur) : '–'} sub={`${withDur.length} Etappen mit Daten`} />
+        <KPI icon={IClock} label="Langsamster Agent" value={dur[slowest] ? slowest : '–'} sub={dur[slowest] ? `${fmtDur(dur[slowest])} · ${Math.round((dur[slowest] / totalSec) * 100)}% der Laufzeit` : 'Keine Daten'} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 14 }}>
         <Panel>
           <PanelHeader icon={IGauge} label="Dauer pro Agent" serif="Dieser Run"
             right={<div style={{ textAlign: 'right' }}>
-              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>{dur.total || '–'}<span style={{ fontSize: 14, color: T.muted }}>s</span></div>
+              <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>{dur.total ? fmtDur(dur.total) : '–'}</div>
               <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>Σ Gesamtdauer</div>
             </div>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
@@ -779,7 +795,7 @@ function TabPerformance({ data, selectedEtappe }) {
               <div key={a.name} style={{ background: T.surfaceAlt, borderRadius: 8, padding: 12 }}>
                 <div style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 600, marginBottom: 8 }}>{a.name}</div>
                 <div style={{ fontFamily: T.serif, fontSize: 28, fontWeight: 400, color: T.ink, lineHeight: 1, marginBottom: 6 }}>
-                  {a.seconds > 0 ? a.seconds : '–'}{a.seconds > 0 && <span style={{ fontSize: 13, color: T.muted }}>s</span>}
+                  {a.seconds > 0 ? fmtDur(a.seconds) : '–'}
                 </div>
                 <div style={{ height: 5, background: T.border, borderRadius: 3, overflow: 'hidden', marginBottom: 6 }}>
                   <div style={{ height: '100%', width: `${pct || 2}%`, background: colors[a.name] || T.accent, borderRadius: 3 }} />
@@ -807,7 +823,7 @@ function TabPerformance({ data, selectedEtappe }) {
                 <tr key={e.id} style={{ borderBottom: `1px solid ${T.border}`, background: e.id === (selectedEtappe?.id ?? data.latestId) ? T.accentSoft : 'transparent' }}>
                   <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>T{e.n} · {e.datum?.slice(5)}</td>
                   <td style={{ padding: '10px', color: T.ink, fontWeight: e.id === (selectedEtappe?.id ?? data.latestId) ? 600 : 400 }}>{e.name}</td>
-                  <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>{e.dur}s</td>
+                  <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>{e.dur ? fmtDur(e.dur) : '–'}</td>
                   <td style={{ padding: '10px' }}><Pill state={e.status} label={e.status} /></td>
                   <td style={{ padding: '10px' }}>
                     <div style={{ width: 80, height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
@@ -1018,7 +1034,7 @@ function EtappeDetailModal({ etappe, onClose }) {
           <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(3, 1fr)' : 'repeat(3, 1fr)', gap: mobile ? 8 : 12 }}>
             {[
               { label: 'Kosten', value: `€${etappe.cost.toFixed(mobile ? 2 : 3)}`, sub: 'dieser Run' },
-              { label: 'Dauer',  value: etappe.dur ? `${etappe.dur}s` : '–', sub: etappe.dur ? `${Math.floor(etappe.dur/60)}:${String(etappe.dur%60).padStart(2,'0')} Min` : '' },
+              { label: 'Dauer',  value: etappe.dur ? fmtDur(etappe.dur) : '–', sub: etappe.dur ? `${etappe.dur}s` : '' },
               { label: 'Fotos',  value: String(etappe.photos_input || '–'), sub: mobile ? `${etappe.photos_selected} / ${etappe.t2i}` : `${etappe.photos_selected} ausgewählt · ${etappe.t2i} Bilder · ${etappe.clips} Clips` },
             ].map(k => (
               <div key={k.label} style={{ background: T.surfaceAlt, borderRadius: 10, padding: mobile ? '10px 8px' : '14px 16px' }}>
@@ -1336,12 +1352,109 @@ function ScopeSwitcher({ scope, onChange }) {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
+// ─── Style Review Tab ─────────────────────────────────────────────────────────
+function TabStyleReview({ data, selectedEtappe }) {
+  const mobile = useMobile();
+  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
+
+  const withReview = data.etappenList.filter(e => e.run_at);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{
+        background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 6 }}>
+          <ISparkles size={15} style={{ color: T.accent }} sw={2} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Style Review</span>
+        </div>
+        <div style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, lineHeight: 1.2, color: T.ink, marginBottom: 6 }}>
+          KI-Bilder bewerten
+        </div>
+        <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.5, marginBottom: 18 }}>
+          Hier kannst du die generierten KI-Bilder jeder Etappe bewerten. Klicke auf eine Etappe, um direkt zum Style Review zu gelangen.
+        </div>
+        {curE && (
+          <a
+            href={`style-review.html?etappe_id=${curE.id}`}
+            style={{
+              display: 'inline-flex', alignItems: 'center', gap: 8,
+              padding: '10px 20px', borderRadius: 10,
+              background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`,
+              color: '#fff', textDecoration: 'none',
+              fontFamily: T.sans, fontSize: 13, fontWeight: 600,
+              boxShadow: `0 4px 14px ${T.accent}44`,
+              transition: 'opacity 0.15s',
+            }}
+          >
+            <ISparkles size={13} sw={2} />
+            Style Review · T{curE.n} {curE.name}
+          </a>
+        )}
+      </div>
+
+      <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 20 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16 }}>
+          <IImage size={15} style={{ color: T.accent }} sw={2} />
+          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Alle Etappen</span>
+          <span style={{ marginLeft: 'auto', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>{withReview.length} mit Daten</span>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+          {[...data.etappenList].reverse().map((e, i) => (
+            <a
+              key={e.id}
+              href={`style-review.html?etappe_id=${e.id}`}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 14,
+                padding: '12px 0',
+                borderBottom: i < data.etappenList.length - 1 ? `1px solid ${T.border}` : 'none',
+                textDecoration: 'none', color: 'inherit',
+                transition: 'background 0.1s',
+              }}
+              onMouseEnter={ev => ev.currentTarget.style.background = T.surfaceAlt}
+              onMouseLeave={ev => ev.currentTarget.style.background = 'transparent'}
+            >
+              <div style={{
+                width: 34, height: 34, borderRadius: 8, flexShrink: 0,
+                background: e.id === curE?.id ? T.accentSoft : T.surfaceAlt,
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                fontFamily: T.mono, fontSize: 11, color: e.id === curE?.id ? T.accentInk : T.muted, fontWeight: 600,
+              }}>T{e.n}</div>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 13, color: T.ink, fontWeight: e.id === curE?.id ? 600 : 400,
+                  whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                  {e.name}
+                </div>
+                {e.stimmung && (
+                  <div style={{ fontSize: 11, color: T.mutedSoft, fontStyle: 'italic', marginTop: 2,
+                    whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                    {e.stimmung}
+                  </div>
+                )}
+              </div>
+              <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>{e.datum?.slice(5)}</span>
+                <span style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 4,
+                  padding: '3px 8px', borderRadius: 6,
+                  background: T.accentSoft, color: T.accentInk,
+                  fontFamily: T.sans, fontSize: 11, fontWeight: 600,
+                }}>→</span>
+              </div>
+            </a>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 const TABS = [
-  { id: 'uebersicht',  label: 'Übersicht',  Icon: IDash,     Content: TabUebersicht },
-  { id: 'kosten',      label: 'Kosten',     Icon: ICoins,    Content: TabKosten },
-  { id: 'performance', label: 'Performance',Icon: IGauge,    Content: TabPerformance },
-  { id: 'reliability', label: 'Reliability',Icon: IShield,   Content: TabReliability },
-  { id: 'liverun',     label: 'Live Run',   Icon: IActivity, Content: null },
+  { id: 'uebersicht',  label: 'Übersicht',  Icon: IDash,       Content: TabUebersicht },
+  { id: 'kosten',      label: 'Kosten',     Icon: ICoins,      Content: TabKosten },
+  { id: 'performance', label: 'Performance',Icon: IGauge,      Content: TabPerformance },
+  { id: 'reliability', label: 'Reliability',Icon: IShield,     Content: TabReliability },
+  { id: 'stylereview', label: 'Style Review',Icon: ISparkles,  Content: TabStyleReview },
 ];
 
 function App() {
@@ -1395,7 +1508,9 @@ function App() {
 
   const active = TABS.find(t => t.id === tab);
   const lastIdx = data.etappenList.length - 1;
-  const curIdx = selectedIdx !== null ? Math.max(0, Math.min(selectedIdx, lastIdx)) : lastIdx;
+  const latestRunIdx = data.etappenList.findIndex(e => e.id === data.latestId);
+  const defaultIdx = latestRunIdx >= 0 ? latestRunIdx : lastIdx;
+  const curIdx = selectedIdx !== null ? Math.max(0, Math.min(selectedIdx, lastIdx)) : defaultIdx;
   const curEtappe = data.etappenList[curIdx];
   const canGoLeft = curIdx > 0;
   const canGoRight = curIdx < lastIdx;
@@ -1415,7 +1530,28 @@ function App() {
               <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>Operations</div>
             </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+          <div style={{ display: 'flex', flexDirection: mobile ? 'column' : 'row', alignItems: mobile ? 'flex-end' : 'center', gap: mobile ? 6 : 10 }}>
+            {mobile && (
+              <button
+                onClick={() => setTab('liverun')}
+                style={{
+                  display: 'inline-flex', alignItems: 'center', gap: 5,
+                  padding: '5px 11px',
+                  background: isRunning
+                    ? `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`
+                    : tab === 'liverun' ? T.accentSoft : T.surfaceAlt,
+                  border: `1px solid ${isRunning ? T.accentDeep : tab === 'liverun' ? T.accent : T.border}`,
+                  borderRadius: 8, cursor: 'pointer',
+                  fontFamily: T.sans, fontSize: 11, fontWeight: 700,
+                  color: isRunning ? '#fff' : tab === 'liverun' ? T.accentInk : T.muted,
+                  letterSpacing: 0.2,
+                  boxShadow: isRunning ? `0 2px 8px ${T.accent}55` : 'none',
+                }}
+              >
+                <IActivity size={11} sw={isRunning ? 2.2 : 1.8} />
+                {isRunning ? '\u25cf LIVE RUN' : 'Live Run'}
+              </button>
+            )}
             <Pill state={curEtappe?.status || data.status} label={curEtappe?.status || data.status} />
             {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>
               T{curEtappe?.n ?? data.etappe} · {curEtappe?.datum || data.date}
@@ -1470,6 +1606,24 @@ function App() {
               {t.label}
             </div>
           ))}
+          {!mobile && (
+            <div onClick={() => setTab('liverun')}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                padding: '9px 14px', borderRadius: 8, cursor: 'pointer', flexShrink: 0,
+                marginLeft: 'auto',
+                background: isRunning
+                  ? `linear-gradient(135deg, ${T.accent}22, ${T.accentDeep}18)`
+                  : tab === 'liverun' ? T.accentSoft : 'transparent',
+                border: isRunning ? `1px solid ${T.accent}55` : tab === 'liverun' ? `1px solid ${T.border}` : '1px solid transparent',
+                color: isRunning ? T.accentInk : tab === 'liverun' ? T.accentInk : T.muted,
+                fontFamily: T.sans, fontSize: 13, fontWeight: tab === 'liverun' ? 600 : 500,
+                transition: 'background 0.12s, color 0.12s',
+              }}>
+              <IActivity size={14} sw={tab === 'liverun' || isRunning ? 2 : 1.7} />
+              {isRunning ? '\u25cf Live Run' : 'Live Run'}
+            </div>
+          )}
         </div>
       </div>
 
@@ -1477,7 +1631,7 @@ function App() {
       <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
         {tab === 'liverun'
           ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} latestEtappe={data?.etappenList?.[data.etappenList.length - 1]} />
-          : <active.Content data={data} selectedEtappe={curEtappe} />
+          : active?.Content ? <active.Content data={data} selectedEtappe={curEtappe} /> : null
         }
       </div>
     </div>
