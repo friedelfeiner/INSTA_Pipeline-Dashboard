@@ -1489,13 +1489,15 @@ function TabStyleReview({ data, selectedEtappe }) {
         body: JSON.stringify({ stil_bewertung: rating, stil_notiz: notiz || null }),
       });
       if (!res.ok) throw new Error(`${res.status}`);
-      // 2. Stile-Tabelle: bewertung aktualisieren (❌→1, 👍→3, 🔥→5)
+      // 2. Stile-Tabelle: bewertung + aktiv setzen (❌→aus, 👍→2, 🔥→4)
       const tagesstil = fotos.length > 0 ? fotos[0].tagesstil : null;
       if (tagesstil) {
-        const stilBewertung = ({ 0: 1, 1: 3, 3: 5 })[rating] ?? 3;
+        const stilUpdate = rating === 0
+          ? { aktiv: false, bewertung: null }
+          : { aktiv: true, bewertung: ({ 1: 2, 3: 4 })[rating] ?? 1 };
         await fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}`, {
           method: 'PATCH', headers: h,
-          body: JSON.stringify({ bewertung: stilBewertung }),
+          body: JSON.stringify(stilUpdate),
         });
       }
       setSaveMsg({ text: '✓ Bewertung gespeichert', type: 'ok' });
