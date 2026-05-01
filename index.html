@@ -1383,7 +1383,7 @@ const LB_RATINGS = [
   { value: 3, emoji: '🔥', label: 'Feuer' },
 ];
 
-function Lightbox({ fotos, startIdx, rating, setRating, notiz, setNotiz, onSave, saving, onClose }) {
+function Lightbox({ fotos, startIdx, onClose }) {
   const [idx, setIdx] = React.useState(startIdx);
   const touchX = React.useRef(null);
 
@@ -1439,46 +1439,6 @@ function Lightbox({ fotos, startIdx, rating, setRating, notiz, setNotiz, onSave,
             color: '#fff', fontSize: 22, padding: '8px 13px', cursor: 'pointer' }}>›</button>
       </>}
 
-      {/* Bottom-Panel: Rating + Notiz */}
-      <div style={{ background: 'rgba(10,8,16,0.92)', padding: '14px 16px 28px',
-        display: 'flex', flexDirection: 'column', gap: 10 }}>
-
-        {/* Rating-Buttons */}
-        <div style={{ display: 'flex', gap: 8 }}>
-          {LB_RATINGS.map(r => (
-            <button key={r.value} onClick={() => setRating(r.value)}
-              style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
-                padding: '10px 0', borderRadius: 10, cursor: 'pointer', border: 'none',
-                background: rating === r.value ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.07)',
-                outline: rating === r.value ? '2px solid rgba(255,255,255,0.5)' : 'none',
-                transition: 'all 0.12s' }}>
-              <span style={{ fontSize: 22 }}>{r.emoji}</span>
-              <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 600,
-                color: rating === r.value ? '#fff' : 'rgba(255,255,255,0.45)',
-                textTransform: 'uppercase', letterSpacing: 0.4 }}>{r.label}</span>
-            </button>
-          ))}
-        </div>
-
-        {/* Notiz */}
-        <textarea value={notiz} onChange={e => setNotiz(e.target.value)}
-          placeholder="Notiz zum Stil…" rows={2}
-          style={{ fontFamily: T.sans, fontSize: 13, color: '#fff',
-            background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
-            borderRadius: 8, padding: '8px 10px', resize: 'none', outline: 'none',
-            lineHeight: 1.5 }} />
-
-        {/* Speichern */}
-        <button onClick={onSave} disabled={saving || rating === null}
-          style={{ padding: '11px', borderRadius: 10, border: 'none', fontFamily: T.sans,
-            fontSize: 14, fontWeight: 600,
-            background: rating !== null && !saving ? T.accent : 'rgba(255,255,255,0.1)',
-            color: rating !== null && !saving ? '#fff' : 'rgba(255,255,255,0.3)',
-            cursor: rating !== null && !saving ? 'pointer' : 'not-allowed',
-            opacity: saving ? 0.7 : 1 }}>
-          {saving ? 'Speichern…' : 'Bewertung speichern'}
-        </button>
-      </div>
     </div>
   );
 }
