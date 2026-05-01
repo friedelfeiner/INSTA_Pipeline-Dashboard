@@ -1377,7 +1377,13 @@ function ImageCardInline({ foto }) {
 }
 
 // ─── Lightbox ────────────────────────────────────────────────────────────────
-function Lightbox({ fotos, startIdx, onClose }) {
+const LB_RATINGS = [
+  { value: 1, emoji: '❌', label: 'Nicht nutzen' },
+  { value: 2, emoji: '👍', label: 'Gut' },
+  { value: 3, emoji: '🔥', label: 'Feuer' },
+];
+
+function Lightbox({ fotos, startIdx, rating, setRating, notiz, setNotiz, onSave, saving, onClose }) {
   const [idx, setIdx] = React.useState(startIdx);
   const touchX = React.useRef(null);
 
@@ -1405,50 +1411,73 @@ function Lightbox({ fotos, startIdx, onClose }) {
   const foto = fotos[idx];
 
   return (
-    <div onClick={onClose}
-      onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
-      style={{ position: 'fixed', inset: 0, zIndex: 2000,
-        background: 'rgba(10,8,16,0.96)',
-        display: 'flex', flexDirection: 'column',
-        alignItems: 'center', justifyContent: 'center' }}>
+    <div onTouchStart={onTouchStart} onTouchEnd={onTouchEnd}
+      style={{ position: 'fixed', inset: 0, zIndex: 2000, background: '#000',
+        display: 'flex', flexDirection: 'column' }}>
 
-      {/* Counter + Close */}
-      <div onClick={e => e.stopPropagation()}
-        style={{ position: 'absolute', top: 0, left: 0, right: 0,
-          padding: '16px 20px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-        <span style={{ fontFamily: T.mono, fontSize: 12, color: 'rgba(255,255,255,0.5)' }}>
-          {idx + 1} / {fotos.length}
-        </span>
-        <button onClick={onClose}
-          style={{ background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 8,
-            color: '#fff', fontSize: 18, lineHeight: 1, padding: '6px 12px', cursor: 'pointer' }}>
-          ✕
-        </button>
-      </div>
-
-      {/* Bild */}
+      {/* Bild — füllt den ganzen Screen */}
       <img src={foto.bildgen_url} alt={foto.foto_nr}
-        onClick={e => e.stopPropagation()}
-        style={{ maxHeight: '85dvh', maxWidth: '96vw',
-          objectFit: 'contain', borderRadius: 8,
-          boxShadow: '0 8px 40px rgba(0,0,0,0.6)' }} />
+        style={{ flex: 1, width: '100%', objectFit: 'contain', display: 'block', minHeight: 0 }} />
 
-      {/* Prev / Next — nur auf Desktop sichtbar, auf Mobile läuft Swipe */}
+      {/* X-Button oben rechts */}
+      <button onClick={onClose}
+        style={{ position: 'absolute', top: 14, right: 14,
+          background: 'rgba(0,0,0,0.5)', border: 'none', borderRadius: 20,
+          color: '#fff', fontSize: 16, lineHeight: 1,
+          width: 36, height: 36, cursor: 'pointer',
+          display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+
+      {/* Prev/Next Desktop */}
       {fotos.length > 1 && <>
-        <button onClick={e => { e.stopPropagation(); prev(); }}
-          style={{ position: 'absolute', left: 12, top: '50%', transform: 'translateY(-50%)',
-            background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 8,
-            color: '#fff', fontSize: 22, padding: '10px 14px', cursor: 'pointer' }}>‹</button>
-        <button onClick={e => { e.stopPropagation(); next(); }}
-          style={{ position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
-            background: 'rgba(255,255,255,0.12)', border: 'none', borderRadius: 8,
-            color: '#fff', fontSize: 22, padding: '10px 14px', cursor: 'pointer' }}>›</button>
+        <button onClick={prev}
+          style={{ position: 'absolute', left: 10, top: '40%',
+            background: 'rgba(0,0,0,0.4)', border: 'none', borderRadius: 8,
+            color: '#fff', fontSize: 22, padding: '8px 13px', cursor: 'pointer' }}>‹</button>
+        <button onClick={next}
+          style={{ position: 'absolute', right: 10, top: '40%',
+            background: 'rgba(0,0,0,0.4)', border: 'none', borderRadius: 8,
+            color: '#fff', fontSize: 22, padding: '8px 13px', cursor: 'pointer' }}>›</button>
       </>}
 
-      {/* Stil-Name */}
-      <div style={{ position: 'absolute', bottom: 20,
-        fontFamily: T.mono, fontSize: 11, color: 'rgba(255,255,255,0.4)', letterSpacing: 0.4 }}>
-        {foto.tagesstil}
+      {/* Bottom-Panel: Rating + Notiz */}
+      <div style={{ background: 'rgba(10,8,16,0.92)', padding: '14px 16px 28px',
+        display: 'flex', flexDirection: 'column', gap: 10 }}>
+
+        {/* Rating-Buttons */}
+        <div style={{ display: 'flex', gap: 8 }}>
+          {LB_RATINGS.map(r => (
+            <button key={r.value} onClick={() => setRating(r.value)}
+              style={{ flex: 1, display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 4,
+                padding: '10px 0', borderRadius: 10, cursor: 'pointer', border: 'none',
+                background: rating === r.value ? 'rgba(255,255,255,0.18)' : 'rgba(255,255,255,0.07)',
+                outline: rating === r.value ? '2px solid rgba(255,255,255,0.5)' : 'none',
+                transition: 'all 0.12s' }}>
+              <span style={{ fontSize: 22 }}>{r.emoji}</span>
+              <span style={{ fontFamily: T.sans, fontSize: 10, fontWeight: 600,
+                color: rating === r.value ? '#fff' : 'rgba(255,255,255,0.45)',
+                textTransform: 'uppercase', letterSpacing: 0.4 }}>{r.label}</span>
+            </button>
+          ))}
+        </div>
+
+        {/* Notiz */}
+        <textarea value={notiz} onChange={e => setNotiz(e.target.value)}
+          placeholder="Notiz zum Stil…" rows={2}
+          style={{ fontFamily: T.sans, fontSize: 13, color: '#fff',
+            background: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.15)',
+            borderRadius: 8, padding: '8px 10px', resize: 'none', outline: 'none',
+            lineHeight: 1.5 }} />
+
+        {/* Speichern */}
+        <button onClick={onSave} disabled={saving || rating === null}
+          style={{ padding: '11px', borderRadius: 10, border: 'none', fontFamily: T.sans,
+            fontSize: 14, fontWeight: 600,
+            background: rating !== null && !saving ? T.accent : 'rgba(255,255,255,0.1)',
+            color: rating !== null && !saving ? '#fff' : 'rgba(255,255,255,0.3)',
+            cursor: rating !== null && !saving ? 'pointer' : 'not-allowed',
+            opacity: saving ? 0.7 : 1 }}>
+          {saving ? 'Speichern…' : 'Bewertung speichern'}
+        </button>
       </div>
     </div>
   );
@@ -1457,8 +1486,8 @@ function Lightbox({ fotos, startIdx, onClose }) {
 // ─── Style Review Tab (inline) ─────────────────────────────────────────────────────────
 const STYLE_RATINGS = [
   { value: 1, emoji: '❌', label: 'Nicht nutzen', color: T.err,    bg: T.errSoft,    border: '#7F1D1D' },
-  { value: 2, emoji: '➖', label: 'Okay',         color: T.muted,  bg: T.surfaceAlt, border: T.border },
-  { value: 3, emoji: '✅', label: 'Super',        color: T.ok,     bg: T.okSoft,     border: '#14532D' },
+  { value: 2, emoji: '👍', label: 'Gut',          color: T.muted,  bg: T.surfaceAlt, border: T.border },
+  { value: 3, emoji: '🔥', label: 'Feuer',        color: T.ok,     bg: T.okSoft,     border: '#14532D' },
 ];
 
 function TabStyleReview({ data, selectedEtappe }) {
@@ -1623,7 +1652,11 @@ function TabStyleReview({ data, selectedEtappe }) {
       </Panel>
 
       {lightbox !== null && (
-        <Lightbox fotos={fotos} startIdx={lightbox} onClose={() => setLightbox(null)} />
+        <Lightbox fotos={fotos} startIdx={lightbox}
+          rating={rating} setRating={setRating}
+          notiz={notiz} setNotiz={setNotiz}
+          onSave={handleSave} saving={saving}
+          onClose={() => setLightbox(null)} />
       )}
     </div>
   );
