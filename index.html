@@ -1378,9 +1378,9 @@ function ImageCardInline({ foto }) {
 
 // ─── Style Review Tab (inline) ─────────────────────────────────────────────────────────
 const STYLE_RATINGS = [
-  { value: 1, emoji: '🔄', label: 'Nochmal', color: T.warn,   bg: T.warnSoft,   border: '#92400E' },
-  { value: 2, emoji: '👍', label: 'Gut',     color: T.accent, bg: T.accentSoft, border: T.accentDeep },
-  { value: 3, emoji: '🔥', label: 'Top',     color: T.ok,     bg: T.okSoft,     border: '#166534' },
+  { value: 1, emoji: '❌', label: 'Nicht nutzen', color: T.err,    bg: T.errSoft,    border: '#7F1D1D' },
+  { value: 2, emoji: '➖', label: 'Okay',         color: T.muted,  bg: T.surfaceAlt, border: T.border },
+  { value: 3, emoji: '✅', label: 'Super',        color: T.ok,     bg: T.okSoft,     border: '#14532D' },
 ];
 
 function TabStyleReview({ data, selectedEtappe }) {
@@ -1456,12 +1456,31 @@ function TabStyleReview({ data, selectedEtappe }) {
         </div>
       </Panel>
 
-      {/* Bildergalerie */}
+      {/* Bildergalerie (Swipeable Carousel) */}
       {fotos.length > 0 ? (
-        <div style={{ display: 'grid',
-          gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(auto-fill, minmax(190px, 1fr))',
-          gap: 12 }}>
-          {fotos.map(foto => <ImageCardInline key={foto.foto_nr} foto={foto} />)}
+        <div style={{ 
+          display: 'flex', 
+          gap: 12, 
+          overflowX: 'auto', 
+          scrollSnapType: 'x mandatory', 
+          paddingBottom: 8,
+          WebkitOverflowScrolling: 'touch',
+          scrollbarWidth: 'none' /* Firefox */
+        }}>
+          {/* Hide scrollbar for Webkit */}
+          <style>{`
+            div::-webkit-scrollbar { display: none; }
+          `}</style>
+          {fotos.map(foto => (
+            <div key={foto.foto_nr} style={{ 
+              scrollSnapAlign: 'center', 
+              flexShrink: 0, 
+              width: mobile ? '85vw' : '280px',
+              maxWidth: '400px'
+            }}>
+              <ImageCardInline foto={foto} />
+            </div>
+          ))}
         </div>
       ) : !loading ? (
         <Panel style={{ textAlign: 'center', padding: 48 }}>
