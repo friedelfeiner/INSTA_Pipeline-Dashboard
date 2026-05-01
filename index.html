@@ -1549,13 +1549,8 @@ function TabStyleReview({ data, selectedEtappe }) {
             );
           })()}
         </div>
-        <div style={{ marginLeft: 18, marginTop: 10, display: 'flex', gap: 16, fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>
-          {stilInfo != null && (
-            <span>{stilInfo.mal_benutzt ?? 0}× benutzt</span>
-          )}
-          {!loading && fotos.length > 0 && (
-            <span>{fotos.length} Bilder</span>
-          )}
+        <div style={{ marginLeft: 18, marginTop: 10, fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>
+          {stilInfo != null ? `${stilInfo.mal_benutzt ?? 0}× benutzt` : (loading ? '' : '–')}
         </div>
       </Panel>
 
