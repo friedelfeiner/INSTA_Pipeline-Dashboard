@@ -59,6 +59,17 @@ const T = {
   mono:        "'Geist Mono', monospace",
 };
 
+// ─── Platform cost split ──────────────────────────────────────────────────────
+// WaveSpeed t2i Seedream ~$0.030/Bild × ~0.88 EUR/USD ≈ €0.0264/Bild
+// Alles andere in imagegen_eur → Atlas (hero_bild Nano Banana 2)
+// video_eur ist komplett Atlas
+const WAVESPEED_EUR_PER_T2I = 0.030 * 0.88;
+function platformCosts(e) {
+  const wavespeed = Math.round((e.t2i_count || 0) * WAVESPEED_EUR_PER_T2I * 10000) / 10000;
+  const atlas     = Math.max(0, Math.round(((e.cost_imagegen_eur || 0) - wavespeed + (e.cost_video_eur || 0)) * 10000) / 10000);
+  return { wavespeed, atlas };
+}
+
 // ─── Supabase config ──────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://rgwbmqlcxxrynufcmwqx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_F-ZIctvp3JyhpVGNXbMttw_9vc7tdtH';
@@ -166,6 +177,8 @@ function transformData(rows, routeMap = {}) {
     imagegen: e.cost_imagegen_eur || 0,
     video:    e.cost_video_eur    || 0,
     tts:      e.cost_tts_eur      || 0,
+    wavespeed: platformCosts(e).wavespeed,
+    atlas:     platformCosts(e).atlas,
     dur:      e.duration_total_s  || 0,
     timings:  e.agent_timings_s   || {},
     photos_input:    e.photos_input    || 0,
@@ -199,11 +212,13 @@ function transformData(rows, routeMap = {}) {
     coreTheme:       latest.tagesueberschrift || '',
     erzaehlStimmung: latest.erzaehl_stimmung || '',
     costs: {
-      total:    latest.cost_total_eur    || 0,
-      llm:      latest.cost_llm_eur      || 0,
-      imagegen: latest.cost_imagegen_eur || 0,
-      video:    latest.cost_video_eur    || 0,
-      tts:      latest.cost_tts_eur      || 0,
+      total:     latest.cost_total_eur    || 0,
+      llm:       latest.cost_llm_eur      || 0,
+      imagegen:  latest.cost_imagegen_eur || 0,
+      video:     latest.cost_video_eur    || 0,
+      tts:       latest.cost_tts_eur      || 0,
+      wavespeed: platformCosts(latest).wavespeed,
+      atlas:     platformCosts(latest).atlas,
     },
     tripTotal,
     tripKuerzel,
@@ -502,10 +517,10 @@ function TabUebersicht({ data, selectedEtappe }) {
               <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>dieser Run</div>
             </div>} />
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <CostBar name="LLM"      value={`€${(latestE?.llm || 0).toFixed(2)}`}      pct={costPct('llm')}      color={T.accent} />
-            <CostBar name="ImageGen" value={`€${(latestE?.imagegen || 0).toFixed(2)}`} pct={costPct('imagegen')} color="#9F6BF5" />
-            <CostBar name="Video"    value={`€${(latestE?.video || 0).toFixed(2)}`}     pct={costPct('video')}    color="#C2A4F8" />
-            <CostBar name="TTS"      value={`€${(latestE?.tts || 0).toFixed(2)}`}       pct={costPct('tts')}      color="#DFCEFA" />
+            <CostBar name="Anthropic"  value={`€${(latestE?.llm || 0).toFixed(2)}`}        pct={costPct('llm')}       color={T.accent} />
+            <CostBar name="Atlas"      value={`€${(latestE?.atlas || 0).toFixed(2)}`}       pct={costPct('atlas')}     color="#9F6BF5" />
+            <CostBar name="WaveSpeed"  value={`€${(latestE?.wavespeed || 0).toFixed(2)}`}   pct={costPct('wavespeed')} color="#C2A4F8" />
+            <CostBar name="FAL.ai"     value={`€${(latestE?.tts || 0).toFixed(2)}`}         pct={costPct('tts')}       color="#DFCEFA" />
           </div>
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
