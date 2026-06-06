@@ -13,6 +13,8 @@
   #root { height: 100vh; height: 100dvh; display: flex; flex-direction: column; }
   .tab-scroll { display:flex; gap:2px; overflow-x:auto; -webkit-overflow-scrolling:touch; scrollbar-width:none; padding-bottom:2px; }
   .tab-scroll::-webkit-scrollbar { display:none; }
+  .no-scrollbar { scrollbar-width:none; -webkit-overflow-scrolling:touch; }
+  .no-scrollbar::-webkit-scrollbar { display:none; }
 </style>
 </head>
 <body>
@@ -120,8 +122,23 @@ async function fetchRouten() {
 function fmtDur(s) {
   if (!s) return '–';
   const m = Math.floor(s / 60);
-  const sec = s % 60;
+  const sec = Math.round(s % 60);
   return m ? `${m}:${String(sec).padStart(2, '0')} Min` : `${s}s`;
+}
+
+// Trend aus einer Zeitreihe: vergleicht jüngere vs. ältere Hälfte.
+// dir 'up' = steigend (rot), 'down'/'stabil' = fallend/gleich (grün).
+function trendInfo(series) {
+  const pts = (series || []).filter(v => typeof v === 'number');
+  if (pts.length < 4) return { dir: 'down', val: 'stabil', pct: 0 };
+  const half = Math.floor(pts.length / 2);
+  const avg = a => a.reduce((s, x) => s + x, 0) / (a.length || 1);
+  const o = avg(pts.slice(0, half));
+  const r = avg(pts.slice(half));
+  if (o === 0) return { dir: r > 0 ? 'up' : 'down', val: r > 0 ? 'neu' : 'stabil', pct: 0 };
+  const pct = Math.round(((r - o) / o) * 100);
+  if (Math.abs(pct) < 8) return { dir: 'down', val: 'stabil', pct };
+  return { dir: pct > 0 ? 'up' : 'down', val: `${pct > 0 ? '+' : ''}${pct}%`, pct };
 }
 
 function etappeName(e) {
@@ -143,7 +160,7 @@ function routeLabel(id) {
 
 function statusMap(s) {
   if (s === 'publiziert') return 'success';
-  if (!s || s === 'neu') return 'partial';
+  if (s === 'fehler' || s === 'error' || s === 'fehlgeschlagen') return 'error';
   return 'partial';
 }
 
@@ -186,6 +203,7 @@ function transformData(rows, routeMap = {}) {
     t2i:      e.t2i_count   || 0,
     clips:    e.video_count || 0,
     retries:  Object.values(e.retries || {}).reduce((a, b) => a + b, 0),
+    retriesByAgent: e.retries || {},
     errors:   e.errors || [],
     publishedPlatforms: e.published_platforms || [],
   }));
@@ -247,6 +265,55 @@ function transformData(rows, routeMap = {}) {
     },
     etappenList,
   };
+}
+
+// ─── Reliability aus Echtdaten ────────────────────────────────────────────────
+// Aggregiert Retries/Fehler aus den geladenen Etappen. Keine Platzhalterwerte:
+// Wo nichts vorliegt, liefert die Funktion leere Listen → UI zeigt sauberen Zustand.
+function reliabilityStats(data) {
+  const list = data.etappenList || [];
+  const recent = list.slice(-12);
+  const n = recent.length;
+  const avg = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
+
+  const byAgent = {};
+  recent.forEach(e => Object.entries(e.retriesByAgent || {}).forEach(([k, v]) => {
+    byAgent[k] = (byAgent[k] || 0) + (v || 0);
+  }));
+  const agentRows = Object.entries(byAgent)
+    .map(([name, retries]) => ({ name, retries, total: n }))
+    .sort((a, b) => b.retries - a.retries);
+
+  const recentRetries = recent.reduce((s, e) => s + e.retries, 0);
+  const tripRetries   = list.reduce((s, e) => s + e.retries, 0);
+  const ran           = list.filter(e => e.cost > 0 || e.dur > 0);
+  const runsWithError = ran.filter(e => (e.errors?.length || 0) > 0).length;
+  const successRate   = ran.length ? Math.round(((ran.length - runsWithError) / ran.length) * 100) : 100;
+
+  const imgSeries = recent.map(e => e.retriesByAgent?.imagegen || 0);
+  const imgTrend  = trendInfo(imgSeries);
+  const half      = Math.floor(imgSeries.length / 2) || 1;
+  const imgStart  = avg(imgSeries.slice(0, half));
+  const imgEnd    = avg(imgSeries.slice(half));
+
+  // Echte Ereignisse: Fehler aus allen Etappen + ggf. eine berechnete Frühwarnung
+  const events = [];
+  list.forEach(e => (e.errors || []).forEach(err => events.push({
+    kind: 'error', etappe: e,
+    title: err.agent ? `${err.agent} · Fehler` : 'Fehler',
+    detail: err.msg || (typeof err === 'string' ? err : JSON.stringify(err)),
+  })));
+  if (imgTrend.dir === 'up' && n >= 4) {
+    events.unshift({
+      kind: 'warn', etappe: null,
+      title: 'imagegen: Retry-Rate erhöht',
+      detail: `Über die letzten ${n} Runs steigt die imagegen-Retry-Rate von Ø ${imgStart.toFixed(1)} auf ${imgEnd.toFixed(1)} (${imgTrend.val}).`,
+    });
+  }
+
+  return { agentRows, recentRetries, tripRetries, successRate, runsWithError,
+    ranCount: ran.length, imgSeries, imgTrend, imgStart, imgEnd, events,
+    warnings: events.length, recentCount: n };
 }
 
 // ─── Icons (inline SVG) ───────────────────────────────────────────────────────
@@ -335,7 +402,7 @@ function AreaChart({ points, h = 60, accent, id }) {
   const min = Math.min(...points);
   const range = max - min || 1;
   const w = 300;
-  const step = w / (points.length - 1);
+  const step = points.length > 1 ? w / (points.length - 1) : w;
   const toY = v => 6 + (1 - (v - min) / range) * (h - 12);
   const line = points.map((p, i) => `${i === 0 ? 'M' : 'L'}${(i * step).toFixed(1)},${toY(p).toFixed(1)}`).join(' ');
   const area = `${line} L${w},${h} L0,${h} Z`;
@@ -470,6 +537,40 @@ function TrendBadge({ dir, val }) {
   );
 }
 
+// Ereignis-Karte aus reliabilityStats().events (echter Fehler oder Frühwarnung)
+function EventCard({ ev }) {
+  const isWarn = ev.kind === 'warn';
+  const col = isWarn ? T.accent : T.err;
+  const bg  = isWarn ? T.accentSoft : T.errSoft;
+  const Icon = isWarn ? ISparkles : IAlert;
+  return (
+    <div style={{ padding: 14, background: bg, borderRadius: 8, borderLeft: `3px solid ${col}` }}>
+      <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
+        <Icon size={15} style={{ color: col, marginTop: 1, flexShrink: 0 }} sw={2} />
+        <div style={{ minWidth: 0 }}>
+          {isWarn && <div style={{ fontFamily: T.mono, fontSize: 10, color: T.accentInk, textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 3 }}>Frühwarnung</div>}
+          <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>
+            {ev.title}{ev.etappe ? ` · T${ev.etappe.n}` : ''}
+          </div>
+          <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3, lineHeight: 1.45, wordBreak: 'break-word' }}>{ev.detail}</div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Positiver Zustand, wenn keine Fehler/Warnungen vorliegen
+function AllClearCard({ text = 'Keine Fehler · alle Runs sauber' }) {
+  return (
+    <div style={{ padding: 14, background: T.okSoft, borderRadius: 8, borderLeft: `3px solid ${T.ok}` }}>
+      <div style={{ display: 'flex', gap: 9, alignItems: 'center' }}>
+        <ICircleCheck size={15} style={{ color: T.ok, flexShrink: 0 }} sw={2} />
+        <div style={{ fontSize: 12.5, color: T.ink, fontWeight: 500 }}>{text}</div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Tab content ──────────────────────────────────────────────────────────────
 function TabUebersicht({ data, selectedEtappe }) {
   const mobile = useMobile();
@@ -493,6 +594,10 @@ function TabUebersicht({ data, selectedEtappe }) {
   const avgCostRoute = data.tripEtappenCount > 0 ? data.tripTotal / data.tripEtappenCount : 0;
   const t2i   = latestE?.t2i   || 0;
   const clips = latestE?.clips || 0;
+  const costTrend = trendInfo(data.trend28);
+  const rel = reliabilityStats(data);
+  const recentRetry = data.etappenList.slice(-data.retryHistory.length);
+  const imgDurTrend = trendInfo(data.durationHistory.imagegen);
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -524,8 +629,8 @@ function TabUebersicht({ data, selectedEtappe }) {
           </div>
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-              <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, fontWeight: 500 }}>Trend · 28 Tage</span>
-              <TrendBadge dir="down" val="stabil" />
+              <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, fontWeight: 500 }}>Trend · {data.trend28.length} Runs</span>
+              <TrendBadge dir={costTrend.dir} val={costTrend.val} />
             </div>
             <AreaChart points={data.trend28} h={56} id="ov-cost" />
           </div>
@@ -546,9 +651,12 @@ function TabUebersicht({ data, selectedEtappe }) {
           </div>
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}`, display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{ flex: 1 }}>
-              <div style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, fontWeight: 500 }}>imagegen · letzte 12 Etappen</div>
-              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', marginTop: 5, background: T.warnSoft, color: T.warn, borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
-                <ITrendUp size={11} sw={2.2} /> <span style={{ fontFamily: T.mono }}>+18%</span> langsamer
+              <div style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, fontWeight: 500 }}>imagegen · letzte {data.durationHistory.imagegen.length} Runs</div>
+              <div style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 8px', marginTop: 5,
+                background: imgDurTrend.dir === 'up' ? T.warnSoft : T.okSoft,
+                color: imgDurTrend.dir === 'up' ? T.warn : T.ok, borderRadius: 4, fontSize: 11, fontWeight: 500 }}>
+                {imgDurTrend.dir === 'up' ? <ITrendUp size={11} sw={2.2} /> : <ITrendDown size={11} sw={2.2} />}
+                <span style={{ fontFamily: T.mono }}>{imgDurTrend.val}</span> {imgDurTrend.val === 'stabil' ? '' : imgDurTrend.dir === 'up' ? 'langsamer' : 'schneller'}
               </div>
             </div>
             <div style={{ width: 90, flexShrink: 0 }}>
@@ -560,35 +668,23 @@ function TabUebersicht({ data, selectedEtappe }) {
 
       <Panel>
         <PanelHeader icon={IShield} label="Reliability" serif="Hat alles funktioniert?"
-          right={<Pill state="warn" label="1 aktive Warnung" />} />
+          right={rel.warnings > 0
+            ? <Pill state="warn" label={`${rel.warnings} aktive Warnung${rel.warnings === 1 ? '' : 'en'}`} />
+            : <Pill state="ok" label="alles stabil" />} />
         <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1.2fr 1fr', gap: 20 }}>
           <div>
-            <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 8 }}>Retries pro Etappe · letzte 12</div>
+            <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 8 }}>Retries pro Run · letzte {data.retryHistory.length}</div>
             <BarChart values={data.retryHistory} h={90}
               colorFn={(v) => v > 1 ? `linear-gradient(180deg, ${T.warn}, ${T.warn}cc)` : v > 0 ? T.accent : T.surfaceAlt} />
             <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>
-              <span>E1</span><span>E4</span><span>E8</span><span>E12</span>
+              <span>T{recentRetry[0]?.n ?? ''}</span>
+              <span>T{recentRetry[recentRetry.length - 1]?.n ?? ''}</span>
             </div>
           </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-            <div style={{ padding: 14, background: T.warnSoft, borderRadius: 8, borderLeft: `3px solid ${T.warn}` }}>
-              <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-                <IAlert size={15} style={{ color: T.warn, marginTop: 1, flexShrink: 0 }} sw={2} />
-                <div>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>ImageGen · Timeout</div>
-                  <div style={{ fontSize: 11.5, color: T.muted, marginTop: 3, lineHeight: 1.4 }}>Retry #2 erfolgreich · 14:22 · kein Eingriff nötig</div>
-                </div>
-              </div>
-            </div>
-            <div style={{ padding: 14, background: T.accentSoft, borderRadius: 8, borderLeft: `3px solid ${T.accent}` }}>
-              <div style={{ display: 'flex', gap: 9, alignItems: 'flex-start' }}>
-                <ISparkles size={15} style={{ color: T.accent, marginTop: 1, flexShrink: 0 }} sw={2} />
-                <div>
-                  <div style={{ fontFamily: T.mono, fontSize: 10, color: T.accentInk, textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 3 }}>Frühwarnung</div>
-                  <div style={{ fontSize: 12.5, color: T.ink, lineHeight: 1.4 }}>ImageGen retried häufiger als üblich — <span style={{ fontFamily: T.mono }}>Ø 0.3 → 1.2</span></div>
-                </div>
-              </div>
-            </div>
+            {rel.events.length > 0
+              ? rel.events.slice(0, 3).map((ev, i) => <EventCard key={i} ev={ev} />)
+              : <AllClearCard />}
           </div>
         </div>
       </Panel>
@@ -607,6 +703,8 @@ function TabKosten({ data, selectedEtappe }) {
   const costPct = k => ct > 0 ? Math.round(((curE?.[k] || 0) / ct) * 100) : 0;
   const withCost = data.etappenList.filter(e => e.cost > 0);
   const teuerste = withCost.length ? withCost.reduce((max, e) => e.cost > max.cost ? e : max) : null;
+  const maxCost = Math.max(...data.etappenList.map(x => x.cost), 0.01);
+  const costTrend = trendInfo(data.trend28);
 
   const toggleSort = (col) => {
     if (sortBy === col) setSortDir(d => d === 'asc' ? 'desc' : 'asc');
@@ -648,8 +746,8 @@ function TabKosten({ data, selectedEtappe }) {
 
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1.4fr 1fr', gap: 14 }}>
         <Panel>
-          <PanelHeader icon={ICoins} label="Kosten-Trend" serif="28 Tage Verlauf"
-            right={<TrendBadge dir="down" val="stabil" />} />
+          <PanelHeader icon={ICoins} label="Kosten-Trend" serif={`${data.trend28.length} Runs Verlauf`}
+            right={<TrendBadge dir={costTrend.dir} val={costTrend.val} />} />
           <AreaChart points={data.trend28} h={120} id="k-trend" />
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>
             <span>T1</span><span>T7</span><span>T14</span><span>T21</span><span>T28</span>
@@ -693,8 +791,7 @@ function TabKosten({ data, selectedEtappe }) {
               </tr>
             </thead>
             <tbody>
-              {(() => { const maxCost = Math.max(...data.etappenList.map(x => x.cost), 0.01); return sorted; })().map((e, _idx) => {
-                const maxCost = Math.max(...data.etappenList.map(x => x.cost), 0.01);
+              {sorted.map(e => {
                 return (
                   <tr key={e.id} onClick={() => setSelected(e)}
                     style={{ borderBottom: `1px solid ${T.border}`,
@@ -855,23 +952,40 @@ function TabPerformance({ data, selectedEtappe }) {
   );
 }
 
-function TabReliability({ data }) {
+function TabReliability({ data, selectedEtappe }) {
   const mobile = useMobile();
+  const rel = reliabilityStats(data);
+  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
+  const retryTrend = trendInfo(data.retryHistory);
+  const avgRetry = rel.recentCount ? rel.recentRetries / rel.recentCount : 0;
+  const curByAgent = curE?.retriesByAgent || {};
+  const curTopAgent = Object.entries(curByAgent).sort((a, b) => b[1] - a[1])[0];
+  const retryEtappen = data.etappenList.filter(e => e.retries > 0);
+  const showImgTrend = rel.imgSeries.some(v => v > 0);
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 14 }}>
-        <KPI icon={IShield} label="Retries heute"       value="2"    sub="imagegen · alle resolved" />
-        <KPI icon={IShield} label="Retries Reise Σ"     value="10"   sub="12 Etappen · Ø 0.8 / Lauf" trend={{ dir: 'up', v: '+18%' }} />
-        <KPI icon={IShield} label="Erfolgsrate"         value="100%" sub="0 unresolvte Fehler" />
+        <KPI icon={IShield} label="Retries (gewählter Run)"
+          value={String(curE?.retries ?? 0)}
+          sub={curE?.retries
+            ? `${curTopAgent ? curTopAgent[0] + ' · ' : ''}${(curE?.errors?.length || 0) ? curE.errors.length + ' Fehler' : 'alle resolved'}`
+            : 'keine Retries'} />
+        <KPI icon={IShield} label="Retries Reise Σ"
+          value={String(rel.tripRetries)}
+          sub={`${rel.recentCount} Runs · Ø ${avgRetry.toFixed(1)} / Run`}
+          trend={retryTrend.val !== 'stabil' ? { dir: retryTrend.dir, v: retryTrend.val } : undefined} />
+        <KPI icon={IShield} label="Erfolgsrate"
+          value={`${rel.successRate}%`}
+          sub={rel.runsWithError ? `${rel.runsWithError} Run${rel.runsWithError === 1 ? '' : 's'} mit Fehler` : '0 Fehler'} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1.2fr 1fr', gap: 14 }}>
         <Panel>
-          <PanelHeader icon={IShield} label="Retry-Verlauf" serif="Letzte 12 Etappen" />
+          <PanelHeader icon={IShield} label="Retry-Verlauf" serif={`Letzte ${data.retryHistory.length} Runs`} />
           <BarChart values={data.retryHistory} h={120}
             colorFn={(v) => v > 1 ? `linear-gradient(180deg, ${T.warn}, ${T.warn}cc)` : v > 0 ? T.accent : T.surfaceAlt} />
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>
-            {data.etappenList.map(e => <span key={e.n} style={{ flex: 1, textAlign: 'center' }}>{e.n}</span>)}
+            {data.etappenList.slice(-data.retryHistory.length).map(e => <span key={e.id} style={{ flex: 1, textAlign: 'center' }}>{e.n}</span>)}
           </div>
           <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 16 }}>
             {[{ color: T.accent, label: '1 Retry' }, { color: T.warn, label: '2+ Retries' }, { color: T.surfaceAlt, label: 'Kein Retry' }].map(l => (
@@ -885,83 +999,57 @@ function TabReliability({ data }) {
 
         <Panel>
           <PanelHeader icon={IShield} label="Retries pro Agent" serif="Häufigkeit" />
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {[
-              { name: 'imagegen', retries: 2, total: 12 },
-              { name: 'video',    retries: 1, total: 12 },
-              { name: 'analyst',  retries: 0, total: 12 },
-              { name: 'narrator', retries: 0, total: 12 },
-              { name: 'tts',      retries: 0, total: 12 },
-            ].map(a => {
-              const pct = (a.retries / a.total) * 100;
-              return (
-                <div key={a.name}>
-                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
-                    <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 500 }}>{a.name}</span>
-                    <span style={{ fontFamily: T.mono, fontSize: 11, color: a.retries > 0 ? T.warn : T.mutedSoft }}>
-                      {a.retries} / {a.total}
-                    </span>
+          {rel.agentRows.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {rel.agentRows.map(a => {
+                const pct = a.total ? (a.retries / a.total) * 100 : 0;
+                return (
+                  <div key={a.name}>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
+                      <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 500 }}>{a.name}</span>
+                      <span style={{ fontFamily: T.mono, fontSize: 11, color: a.retries > 0 ? T.warn : T.mutedSoft }}>
+                        {a.retries} / {a.total}
+                      </span>
+                    </div>
+                    <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${pct || 2}%`, background: a.retries > 1 ? T.warn : a.retries > 0 ? T.accent : T.surfaceAlt, borderRadius: 4 }} />
+                    </div>
                   </div>
-                  <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
-                    <div style={{ height: '100%', width: `${pct || 2}%`, background: a.retries > 1 ? T.warn : a.retries > 0 ? T.accent : T.surfaceAlt, borderRadius: 4 }} />
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-          <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
-            <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 4 }}>Trend imagegen</div>
-            <AreaChart points={[0.2, 0.3, 0.3, 0.4, 0.5, 0.6, 0.8, 0.9, 1.0, 1.1, 1.1, 1.2]} h={36} accent={T.warn} id="rel-img-trend" />
-            <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-              <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>Ø 0.3 → 1.2</span>
-              <TrendBadge dir="up" val="+18%" />
+                );
+              })}
             </div>
-          </div>
+          ) : (
+            <div style={{ fontSize: 12, color: T.mutedSoft, fontStyle: 'italic' }}>Keine Retries in den letzten {rel.recentCount} Runs.</div>
+          )}
+          {showImgTrend && (
+            <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
+              <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 4 }}>Trend imagegen</div>
+              <AreaChart points={rel.imgSeries} h={36} accent={T.warn} id="rel-img-trend" />
+              <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>Ø {rel.imgStart.toFixed(1)} → {rel.imgEnd.toFixed(1)}</span>
+                <TrendBadge dir={rel.imgTrend.dir} val={rel.imgTrend.val} />
+              </div>
+            </div>
+          )}
         </Panel>
       </div>
 
       <Panel>
         <PanelHeader icon={IAlert} label="Ereignisse" serif="Alle Fehler & Warnungen" />
         <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ padding: 14, background: T.warnSoft, borderRadius: 8, borderLeft: `3px solid ${T.warn}` }}>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-              <IAlert size={16} style={{ color: T.warn, marginTop: 2, flexShrink: 0 }} sw={2} />
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>ImageGen · Timeout</div>
-                  <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                    <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>14:22</span>
-                    <Pill state="ok" label="resolved" />
-                  </div>
-                </div>
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 4, lineHeight: 1.5 }}>
-                  Request timed out nach 30s · Retry #1 failed · Retry #2 erfolgreich · kein manueller Eingriff nötig
-                </div>
-              </div>
-            </div>
-          </div>
+          {rel.events.length > 0
+            ? rel.events.map((ev, i) => <EventCard key={i} ev={ev} />)
+            : <AllClearCard text="Keine Fehler oder Warnungen" />}
 
-          <div style={{ padding: 14, background: T.accentSoft, borderRadius: 8, borderLeft: `3px solid ${T.accent}` }}>
-            <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start' }}>
-              <ISparkles size={16} style={{ color: T.accent, marginTop: 2, flexShrink: 0 }} sw={2} />
-              <div style={{ flex: 1 }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start' }}>
-                  <div>
-                    <div style={{ fontFamily: T.mono, fontSize: 10, color: T.accentInk, textTransform: 'uppercase', letterSpacing: 0.6, fontWeight: 600, marginBottom: 3 }}>Frühwarnung · Systembeobachtung</div>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>ImageGen: Retry-Rate erhöht</div>
-                  </div>
-                </div>
-                <div style={{ fontSize: 12, color: T.muted, marginTop: 4, lineHeight: 1.5 }}>
-                  Über die letzten 12 Etappen steigt die Retry-Rate von <span style={{ fontFamily: T.mono }}>Ø 0.3</span> auf <span style={{ fontFamily: T.mono }}>1.2</span>. Noch kein kritischer Schwellenwert, aber zu beobachten.
-                </div>
-              </div>
+          {retryEtappen.length > 0 && (
+            <div style={{ fontSize: 11, color: T.mutedSoft, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>
+              Retries (resolved)
             </div>
-          </div>
-
-          {data.etappenList.filter(e => e.retries > 0).map(e => (
-            <div key={e.n} style={{ padding: 14, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8 }}>
+          )}
+          {retryEtappen.map(e => (
+            <div key={e.id} style={{ padding: 14, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8 }}>
               <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <div style={{ width: 28, height: 28, borderRadius: 6, background: T.surfaceAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: T.mono, fontSize: 11, color: T.muted, fontWeight: 600 }}>E{e.n}</div>
+                <div style={{ width: 28, height: 28, borderRadius: 6, background: T.surfaceAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: T.mono, fontSize: 11, color: T.muted, fontWeight: 600 }}>T{e.n}</div>
                 <div style={{ flex: 1 }}>
                   <div style={{ fontSize: 12.5, color: T.ink, fontWeight: 500 }}>{e.name}</div>
                   <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{e.retries} Retr{e.retries === 1 ? 'y' : 'ies'} · alle resolved</div>
@@ -983,6 +1071,11 @@ function EtappeDetailModal({ etappe, onClose }) {
   React.useEffect(() => {
     if (etappe?.id) fetchSteps(etappe.id).then(setSteps);
   }, [etappe?.id]);
+  React.useEffect(() => {
+    const onKey = e => { if (e.key === 'Escape') onClose(); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   if (!etappe) return null;
 
@@ -1026,13 +1119,6 @@ function EtappeDetailModal({ etappe, onClose }) {
               )}
             </div>
             <div style={{ display: 'flex', gap: 8, flexShrink: 0, flexDirection: mobile ? 'column' : 'row', alignItems: 'flex-end' }}>
-              {!mobile && <a href={`style-review.html?etappe_id=${etappe.id}`}
-                style={{ background: T.accentSoft, border: `1px solid ${T.border}`,
-                  borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontFamily: T.sans,
-                  fontSize: 12, color: T.accent, fontWeight: 600, textDecoration: 'none',
-                  display: 'inline-flex', alignItems: 'center', gap: 5 }}>
-                <ISparkles size={12} sw={2} /> Style Review →
-              </a>}
               <button onClick={onClose} style={{ background: T.surfaceAlt, border: `1px solid ${T.border}`,
                 borderRadius: 8, padding: '6px 12px', cursor: 'pointer', fontFamily: T.sans,
                 fontSize: 12, color: T.muted, fontWeight: 500 }}>✕ Schließen</button>
@@ -1392,12 +1478,6 @@ function ImageCardInline({ foto }) {
 }
 
 // ─── Lightbox ────────────────────────────────────────────────────────────────
-const LB_RATINGS = [
-  { value: 1, emoji: '❌', label: 'Nicht nutzen' },
-  { value: 2, emoji: '👍', label: 'Gut' },
-  { value: 3, emoji: '🔥', label: 'Feuer' },
-];
-
 function Lightbox({ fotos, startIdx, onClose }) {
   const [idx, setIdx] = React.useState(startIdx);
   const touchX = React.useRef(null);
@@ -1484,7 +1564,7 @@ function TabStyleReview({ data, selectedEtappe }) {
     setLoading(true); setDetail(null); setFotos([]); setRating(null); setNotiz(''); setSaveMsg(null); setStilInfo(null);
     const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
     Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}&select=id,reel_stil,stil_bewertung,stil_notiz&limit=1`, { headers: h }).then(r => r.json()).then(rows => rows[0] || null),
+      fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}&select=id,stil_bewertung,stil_notiz&limit=1`, { headers: h }).then(r => r.json()).then(rows => rows[0] || null),
       fetch(`${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${curE.id}&bildgen_url=not.is.null&select=foto_nr,bildgen_url,tagesstil&order=foto_nr.asc`, { headers: h }).then(r => r.json()),
     ]).then(([det, f]) => {
       setDetail(det);
@@ -1511,11 +1591,12 @@ function TabStyleReview({ data, selectedEtappe }) {
       });
       if (!res.ok) throw new Error(`${res.status}`);
       // 2. Stile-Tabelle: bewertung + aktiv setzen (❌→aus, 👍→2, 🔥→4)
+      // rating-Werte: 1 = ❌ Nicht nutzen, 2 = 👍 Gut, 3 = 🔥 Feuer
       const tagesstil = fotos.length > 0 ? fotos[0].tagesstil : null;
       if (tagesstil) {
-        const stilUpdate = rating === 0
+        const stilUpdate = rating === 1
           ? { aktiv: false, bewertung: null }
-          : { aktiv: true, bewertung: ({ 1: 2, 3: 4 })[rating] ?? 1 };
+          : { aktiv: true, bewertung: rating === 3 ? 4 : 2 };
         await fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}`, {
           method: 'PATCH', headers: h,
           body: JSON.stringify(stilUpdate),
@@ -1529,7 +1610,7 @@ function TabStyleReview({ data, selectedEtappe }) {
   }
 
   if (!curE) return null;
-  const stilName = fotos.length > 0 ? (fotos[0].tagesstil || detail?.reel_stil || '–') : (detail?.reel_stil || '–');
+  const stilName = fotos.length > 0 ? (fotos[0].tagesstil || '–') : '–';
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1571,19 +1652,13 @@ function TabStyleReview({ data, selectedEtappe }) {
 
       {/* Bildergalerie (Swipeable Carousel) */}
       {fotos.length > 0 ? (
-        <div style={{ 
-          display: 'flex', 
-          gap: 12, 
-          overflowX: 'auto', 
-          scrollSnapType: 'x mandatory', 
+        <div className="no-scrollbar" style={{
+          display: 'flex',
+          gap: 12,
+          overflowX: 'auto',
+          scrollSnapType: 'x mandatory',
           paddingBottom: 8,
-          WebkitOverflowScrolling: 'touch',
-          scrollbarWidth: 'none' /* Firefox */
         }}>
-          {/* Hide scrollbar for Webkit */}
-          <style>{`
-            div::-webkit-scrollbar { display: none; }
-          `}</style>
           {fotos.map((foto, i) => (
             <div key={foto.foto_nr} onClick={() => setLightbox(i)}
               style={{
@@ -1658,9 +1733,6 @@ function TabStyleReview({ data, selectedEtappe }) {
 
       {lightbox !== null && (
         <Lightbox fotos={fotos} startIdx={lightbox}
-          rating={rating} setRating={setRating}
-          notiz={notiz} setNotiz={setNotiz}
-          onSave={handleSave} saving={saving}
           onClose={() => setLightbox(null)} />
       )}
     </div>
@@ -1687,9 +1759,9 @@ function ScopeSwitcher({ scope, onChange }) {
 const TABS = [
   { id: 'uebersicht',  label: 'Übersicht',   Icon: IDash,      Content: TabUebersicht },
   { id: 'kosten',      label: 'Kosten',      Icon: ICoins,     Content: TabKosten },
+  { id: 'stylereview', label: 'Style Review',Icon: ISparkles,  Content: TabStyleReview },
   { id: 'performance', label: 'Performance', Icon: IGauge,     Content: TabPerformance },
   { id: 'reliability', label: 'Reliability', Icon: IShield,    Content: TabReliability },
-  { id: 'stylereview', label: 'Style Review',Icon: ISparkles,  Content: TabStyleReview },
 ];
 
 function App() {
@@ -1787,6 +1859,16 @@ function App() {
                 {isRunning ? '\u25cf LIVE RUN' : 'Live Run'}
               </button>
             )}
+            <a href="style-overview.html"
+              style={{
+                display: 'inline-flex', alignItems: 'center', gap: 5,
+                padding: '5px 11px', background: T.surfaceAlt,
+                border: `1px solid ${T.border}`, borderRadius: 8,
+                textDecoration: 'none', fontFamily: T.sans, fontSize: 11,
+                fontWeight: 700, color: T.muted, letterSpacing: 0.2,
+              }}>
+              🎨 Stil-Katalog
+            </a>
             <Pill state={curEtappe?.status || data.status} label={curEtappe?.status || data.status} />
             {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>
               T{curEtappe?.n ?? data.etappe} · {curEtappe?.datum || data.date}

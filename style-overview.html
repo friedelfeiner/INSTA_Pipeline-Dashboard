@@ -1,0 +1,579 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Style Katalog — INSTA Pipeline</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
+<style>
+  :root {
+    --bg: #FBFAFC;
+    --card: #FFFFFF;
+    --surface-alt: #F6F3FB;
+    --ink: #14101C;
+    --muted: #6E6780;
+    --muted-soft: #9990A8;
+    --line: #ECE6F4;
+    --accent: #7C3AED;
+    --accent-deep: #5B21B6;
+    --accent-soft: #F0E8FF;
+    --accent-ink: #4C1D95;
+    --top: #d97706;
+    --top-bg: #FEF3C7;
+    --gut: #15803d;
+    --gut-bg: #DCFCE7;
+    --mittel: #64748b;
+    --mittel-bg: #eef1f5;
+    --raus: #B91C1C;
+    --raus-bg: #FEE2E2;
+    --fav: #db2777;
+    --sans: 'Geist', ui-sans-serif, system-ui, sans-serif;
+    --mono: 'Geist Mono', monospace;
+    --serif: 'Instrument Serif', Georgia, serif;
+  }
+  * { box-sizing: border-box; }
+  body {
+    font-family: var(--sans);
+    background: var(--bg); color: var(--ink); margin: 0; padding: 0;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* ── Sticky Header ───────────────────────────── */
+  header {
+    position: sticky; top: 0; z-index: 100;
+    background: rgba(251,250,252,0.92);
+    backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--line);
+    padding: 14px 24px 10px;
+  }
+  .head-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; }
+  .back-link { font-size: 0.82rem; color: var(--muted); text-decoration: none; font-weight: 600; font-family: var(--sans); }
+  .back-link:hover { color: var(--ink); }
+  h1 { font-size: 1.9rem; margin: 0; font-weight: 400; letter-spacing: -0.01em; font-family: var(--serif); line-height: 1; }
+  .head-sub { margin-top: 4px; display: flex; align-items: center; gap: 14px; }
+  .total-pill { position: absolute; left: 50%; transform: translateX(-50%); font-size: 0.75rem; color: var(--ink); font-family: var(--mono); font-weight: 300; white-space: nowrap; }
+  .head-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  select {
+    font-family: var(--sans); font-size: 0.82rem; padding: 5px 10px;
+    border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink);
+    cursor: pointer;
+  }
+
+  /* ── Filter chips ────────────────────────────── */
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+  .chip {
+    font-family: var(--sans); font-size: 0.7rem; padding: 3px 9px; border-radius: 20px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--card); color: var(--muted);
+    transition: all 0.12s; white-space: nowrap;
+  }
+  .chip:hover { border-color: var(--accent); color: var(--accent); }
+  .chip.active { background: var(--accent); color: #fff; border-color: var(--accent); }
+  .chip .n { opacity: 0.6; margin-left: 3px; font-variant-numeric: tabular-nums; font-family: var(--mono); }
+  .chip.active .n { opacity: 0.85; }
+  .chip-sep { width: 1px; background: var(--line); margin: 2px 3px; }
+
+  /* ── Rows ────────────────────────────────────── */
+  main { padding: 8px 24px 80px; }
+  .row {
+    display: flex; gap: 18px; align-items: stretch;
+    background: var(--card); border: 1px solid var(--line); border-radius: 12px;
+    padding: 16px; margin: 12px 0;
+    transition: box-shadow 0.12s;
+  }
+  .row:hover { box-shadow: 0 2px 12px rgba(124,58,237,0.06); }
+  .row.hidden { display: none; }
+
+  .info { width: 250px; flex-shrink: 0; }
+  .name { font-family: var(--serif); font-size: 1.2rem; font-weight: 400; line-height: 1.2; margin-bottom: 7px; letter-spacing: 0; }
+  .badges { display: flex; flex-wrap: wrap; gap: 5px; margin-bottom: 9px; }
+  .badge { font-family: var(--mono); font-size: 0.68rem; padding: 2px 7px; border-radius: 5px; background: var(--surface-alt); color: var(--muted); font-weight: 600; letter-spacing: 0.01em; }
+  .badge.cat { background: var(--accent-soft); color: var(--accent-ink); }
+  .badge.use { background: var(--gut-bg); color: var(--gut); }
+  .badge.weight { background: var(--top-bg); color: var(--top); }
+
+  .desc-wrap { position: relative; }
+  .desc { font-family: var(--sans); font-size: 0.8rem; color: var(--muted); line-height: 1.55; }
+  .desc.clamped {
+    display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 3; line-clamp: 3;
+    overflow: hidden;
+  }
+  .desc-more {
+    display: inline-block; margin-top: 4px; font-family: var(--sans); font-size: 0.74rem;
+    color: var(--accent); background: none; border: none; cursor: pointer; padding: 0;
+    font-weight: 600; letter-spacing: 0.01em;
+  }
+  .desc-more:hover { text-decoration: underline; }
+
+  .imgs {
+    display: flex; gap: 8px; flex-grow: 1; overflow-x: auto;
+    background: var(--surface-alt); border-radius: 9px; padding: 8px; align-items: center; min-height: 150px;
+  }
+  .imgs img { height: 200px; border-radius: 6px; box-shadow: 0 1px 5px rgba(0,0,0,0.1); cursor: zoom-in; }
+  .no-img { color: var(--muted-soft); font-style: italic; font-size: 0.82rem; width: 100%; text-align: center; font-family: var(--sans); }
+  .img-more {
+    flex-shrink: 0; align-self: center; font-family: var(--sans); font-size: 0.8rem; font-weight: 600; color: var(--muted);
+    background: var(--card); border: 1px dashed var(--line); border-radius: 8px;
+    padding: 0 14px; height: 200px; display: flex; align-items: center; cursor: zoom-in; white-space: nowrap;
+  }
+  .img-more:hover { border-color: var(--accent); color: var(--accent); }
+
+  /* ── Rating column ───────────────────────────── */
+  .rate { width: 160px; flex-shrink: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 6px; align-content: start; }
+  .rate-btn {
+    font-family: var(--sans); cursor: pointer; padding: 10px 6px; border-radius: 12px;
+    border: 2px solid var(--line); background: var(--card);
+    text-align: center; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    transition: all 0.15s ease;
+  }
+  .rate-btn:hover { border-color: var(--accent); transform: translateY(-1px); }
+  .rate-emoji { font-size: 1.35rem; line-height: 1; }
+  .rate-label { font-family: var(--sans); font-size: 0.65rem; font-weight: 600; text-transform: uppercase; letter-spacing: 0.04em; color: var(--muted); }
+  .rate-btn .w { font-family: var(--mono); font-size: 0.6rem; color: var(--muted-soft); }
+  .rate-btn.on-top    { background: var(--top-bg);    border-color: var(--top);    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(217,119,6,0.22); }
+  .rate-btn.on-top    .rate-label { color: var(--top); }
+  .rate-btn.on-gut    { background: var(--gut-bg);    border-color: var(--gut);    transform: translateY(-2px); box-shadow: 0 4px 12px rgba(21,128,61,0.22); }
+  .rate-btn.on-gut    .rate-label { color: var(--gut); }
+  .rate-btn.on-mittel { background: var(--mittel-bg); border-color: var(--mittel); transform: translateY(-2px); box-shadow: 0 4px 12px rgba(100,116,139,0.18); }
+  .rate-btn.on-mittel .rate-label { color: var(--mittel); }
+  .rate-btn.on-raus   { background: var(--raus-bg);   border-color: var(--raus);   transform: translateY(-2px); box-shadow: 0 4px 12px rgba(185,28,28,0.18); }
+  .rate-btn.on-raus   .rate-label { color: var(--raus); }
+  .rate-foot { display: flex; gap: 6px; margin-top: 2px; grid-column: 1 / -1; }
+  .mini-btn {
+    font-family: var(--sans); font-size: 0.74rem; padding: 6px 8px; border-radius: 7px; cursor: pointer;
+    border: 1px solid var(--line); background: var(--card); color: var(--muted); flex: 1; text-align: center;
+    transition: all 0.12s;
+  }
+  .mini-btn:hover { border-color: var(--accent); color: var(--accent); }
+  .fav-btn.on { background: #fdeef5; border-color: var(--fav); color: var(--fav); font-weight: 700; }
+
+  /* ── Toast + lightbox ────────────────────────── */
+  .toast {
+    position: fixed; bottom: 22px; left: 50%; transform: translateX(-50%) translateY(20px);
+    padding: 10px 18px; border-radius: 9px; font-family: var(--sans); font-size: 0.85rem; z-index: 1000;
+    box-shadow: 0 6px 22px rgba(124,58,237,0.16); opacity: 0; transition: all 0.22s; pointer-events: none;
+  }
+  .toast.show { opacity: 1; transform: translateX(-50%) translateY(0); }
+  .lightbox {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.86); z-index: 4000;
+    display: none; align-items: center; justify-content: center; cursor: zoom-out;
+  }
+  .lightbox.show { display: flex; }
+  #lightboxImg { max-width: 86vw; max-height: 92vh; border-radius: 8px; cursor: default; }
+  .lb-nav {
+    position: fixed; top: 50%; transform: translateY(-50%); z-index: 4001;
+    width: 54px; height: 84px; border: none; border-radius: 10px;
+    background: rgba(255,255,255,0.12); color: #fff; font-size: 2.2rem; line-height: 1;
+    cursor: pointer; display: flex; align-items: center; justify-content: center; transition: background 0.12s;
+  }
+  .lb-nav:hover { background: rgba(255,255,255,0.28); }
+  .lb-prev { left: 3vw; }
+  .lb-next { right: 3vw; }
+  .lb-counter {
+    position: fixed; bottom: 4vh; left: 50%; transform: translateX(-50%); z-index: 4001;
+    color: #fff; font-size: 0.9rem; background: rgba(0,0,0,0.45);
+    padding: 5px 14px; border-radius: 20px; font-variant-numeric: tabular-nums;
+  }
+  .loading { text-align: center; padding: 80px; color: var(--muted); font-size: 0.95rem; font-family: var(--sans); }
+
+  /* ── Gallery Lightbox ──────────────────────────── */
+  .gallery-lb {
+    position: fixed; inset: 0; background: rgba(10,8,18,0.95); z-index: 3000;
+    display: none; flex-direction: column; overflow: hidden;
+  }
+  .gallery-lb.show { display: flex; }
+  .gallery-lb-head {
+    flex-shrink: 0;
+    display: flex; align-items: center; gap: 16px;
+    padding: 16px 28px 12px;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+  }
+  .gallery-lb-title {
+    font-family: var(--serif); font-size: 1.6rem; color: #fff; font-weight: 400; letter-spacing: -0.01em; line-height: 1;
+  }
+  .gallery-lb-count {
+    font-family: var(--mono); font-size: 0.78rem; color: rgba(255,255,255,0.4);
+  }
+  .gallery-lb-close {
+    margin-left: auto;
+    background: rgba(255,255,255,0.1); border: none; color: #fff; font-size: 1.4rem; line-height: 1;
+    width: 38px; height: 38px; border-radius: 9px; cursor: pointer; display: flex; align-items: center; justify-content: center;
+    transition: background 0.12s;
+  }
+  .gallery-lb-close:hover { background: rgba(255,255,255,0.22); }
+  .gallery-lb-body {
+    flex: 1; overflow-y: auto; padding: 20px 28px 40px;
+  }
+  .gallery-grid {
+    display: flex; flex-wrap: wrap; gap: 8px; align-items: flex-start;
+  }
+  .gallery-grid img {
+    height: 200px; border-radius: 7px;
+    box-shadow: 0 2px 10px rgba(0,0,0,0.35);
+    cursor: zoom-in; transition: opacity 0.12s, transform 0.12s;
+    flex-shrink: 0;
+  }
+  .gallery-grid img:hover { opacity: 0.88; transform: scale(1.02); }
+  .gallery-no-img { color: rgba(255,255,255,0.3); font-style: italic; font-size: 0.9rem; font-family: var(--sans); padding: 60px 0; }
+
+  /* clickable style name */
+  .name { cursor: pointer; }
+  .name:hover { color: var(--accent); }
+</style>
+</head>
+<body>
+
+<header>
+  <div class="head-top">
+    <h1>Style Katalog</h1>
+    <span class="total-pill" id="totalPill">lädt …</span>
+    <div class="head-right">
+      <select id="sortSel">
+        <option value="rating">Sortierung: Bewertung (beste zuerst)</option>
+        <option value="name">Sortierung: Name A–Z</option>
+        <option value="used">Sortierung: Meist genutzt</option>
+        <option value="recent">Sortierung: Zuletzt genutzt</option>
+      </select>
+    </div>
+  </div>
+  <div class="head-sub">
+    <a href="index.html" class="back-link" title="Zurück zum Dashboard">← Dashboard</a>
+  </div>
+  <div class="chips" id="statusChips"></div>
+  <div class="chips" id="catChips"></div>
+</header>
+
+<main id="root">
+  <div class="loading">Lade Styles aus Supabase …</div>
+</main>
+
+<div class="toast" id="toast"></div>
+<div class="gallery-lb" id="galleryLb">
+  <div class="gallery-lb-head">
+    <span class="gallery-lb-title" id="galleryTitle"></span>
+    <span class="gallery-lb-count" id="galleryCount"></span>
+    <button class="gallery-lb-close" id="galleryClose">✕</button>
+  </div>
+  <div class="gallery-lb-body">
+    <div class="gallery-grid" id="galleryGrid"></div>
+  </div>
+</div>
+
+<div class="lightbox" id="lightbox">
+  <button class="lb-nav lb-prev" id="lbPrev">‹</button>
+  <img id="lightboxImg" src="" alt="">
+  <button class="lb-nav lb-next" id="lbNext">›</button>
+  <div class="lb-counter" id="lbCounter"></div>
+</div>
+
+<script>
+const SUPABASE_URL = 'https://rgwbmqlcxxrynufcmwqx.supabase.co';
+const SUPABASE_KEY = 'sb_publishable_F-ZIctvp3JyhpVGNXbMttw_9vc7tdtH';
+const HEADERS = { 'apikey': SUPABASE_KEY, 'Authorization': `Bearer ${SUPABASE_KEY}` };
+
+// ── Bewertungs-Modell (ordinale Gewichts-Skala) ──────────────
+// aktiv=false        -> ❌ Raus  (Gewicht 0, fällt aus der Auswahl)
+// bewertung=4        -> 🔥 Top   (Gewicht 4)
+// bewertung=2        -> 👍 Gut   (Gewicht 2)
+// bewertung=1        -> 🟡 Mittel(Gewicht 1)
+// bewertung=null     -> ⚪ Unbewertet (Gewicht 1 = wie Mittel)
+const RATINGS = {
+  top:    { emoji: '🔥', label: 'Top',    db: { bewertung: 4, aktiv: true },    weight: '4×', cls: 'on-top' },
+  gut:    { emoji: '👍', label: 'Gut',    db: { bewertung: 2, aktiv: true },    weight: '2×', cls: 'on-gut' },
+  mittel: { emoji: '🟡', label: 'Mittel', db: { bewertung: 1, aktiv: true },    weight: '1×', cls: 'on-mittel' },
+  raus:   { emoji: '❌', label: 'Raus',   db: { bewertung: null, aktiv: false }, weight: '0×', cls: 'on-raus' },
+};
+const ORDER = ['top', 'gut', 'mittel', 'raus'];
+const RANK = { top: 0, gut: 1, mittel: 2, unbewertet: 3, raus: 4 };
+
+let STILE = [];
+let IMAGES = {};            // styleName -> [url, ...]
+let activeStatus = 'alle';
+let activeCat = 'alle';
+
+// Wählt n Bilder gleichmäßig über das ganze Array verteilt (Mischung über alle Läufe).
+// Gibt {u, i} zurück — i ist der Original-Index für die Lightbox (die durch ALLE blättert).
+function pickSpread(arr, n) {
+  if (arr.length <= n) return arr.map((u, i) => ({ u, i }));
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const i = Math.round(k * (arr.length - 1) / (n - 1));
+    if (!out.some(o => o.i === i)) out.push({ u: arr[i], i });
+  }
+  return out;
+}
+
+function stateOf(s) {
+  if (s.aktiv === false) return 'raus';
+  if (s.bewertung === 4) return 'top';
+  if (s.bewertung === 2) return 'gut';
+  if (s.bewertung === 1) return 'mittel';
+  return 'unbewertet';
+}
+
+// ── Laden ────────────────────────────────────────────────────
+async function load() {
+  try {
+    const [stileRes, urlRes, localRes] = await Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/stile?select=*&order=name`, { headers: HEADERS }),
+      fetch(`${SUPABASE_URL}/rest/v1/fotos?select=tagesstil,bildgen_url,foto_nr&bildgen_url=not.is.null&order=foto_nr&limit=3000`, { headers: HEADERS }),
+      fetch(`${SUPABASE_URL}/rest/v1/fotos?select=tagesstil,bildgen_datei,foto_nr&bildgen_datei=not.is.null&bildgen_url=is.null&order=foto_nr&limit=3000`, { headers: HEADERS }),
+    ]);
+    STILE = await stileRes.json();
+    const urlRows = await urlRes.json();
+    const localRows = await localRes.json();
+
+    // Bilder pro Style sammeln: review_bilder > bildgen_url > bildgen_datei(file://), max 5
+    IMAGES = {};
+    const add = (style, src) => {
+      if (!style || !src) return;
+      const list = (IMAGES[style] = IMAGES[style] || []);
+      if (list.length < 150 && !list.includes(src)) list.push(src);   // alle sammeln (für Lightbox)
+    };
+    STILE.forEach(s => {
+      if (Array.isArray(s.review_bilder)) s.review_bilder.forEach(u => add(s.name, u));
+    });
+    urlRows.forEach(r => add(r.tagesstil, r.bildgen_url));
+    localRows.forEach(r => add(r.tagesstil, fileUrl(r.bildgen_datei)));
+
+    buildChips();
+    render();
+  } catch (err) {
+    document.getElementById('root').innerHTML =
+      `<div class="loading">❌ Laden fehlgeschlagen: ${err.message}<br><br>` +
+      `Tipp: Seite lokal im Browser öffnen (file://). Internet/Supabase erreichbar?</div>`;
+  }
+}
+
+function fileUrl(p) {
+  return 'file://' + p.split('/').map(encodeURIComponent).join('/');
+}
+
+// ── Chips ────────────────────────────────────────────────────
+function counts() {
+  const c = { alle: STILE.length, unbewertet: 0, top: 0, gut: 0, mittel: 0, raus: 0, fav: 0 };
+  STILE.forEach(s => { c[stateOf(s)]++; if (s.favorit) c.fav++; });
+  return c;
+}
+function catCounts() {
+  const c = {};
+  STILE.forEach(s => { const k = s.kategorie || '—'; c[k] = (c[k] || 0) + 1; });
+  return c;
+}
+
+function buildChips() {
+  const c = counts();
+  const statusDefs = [
+    ['alle', 'Alle'], ['unbewertet', '⚪ Unbewertet'], ['top', '🔥 Top'],
+    ['gut', '👍 Gut'], ['mittel', '🟡 Mittel'], ['raus', '❌ Raus'], ['fav', '⭐ Favoriten'],
+  ];
+  document.getElementById('statusChips').innerHTML = statusDefs.map(([k, lbl]) =>
+    `<div class="chip ${activeStatus === k ? 'active' : ''}" data-status="${k}">${lbl}<span class="n">${c[k] ?? 0}</span></div>`
+  ).join('');
+
+  const cc = catCounts();
+  const cats = Object.keys(cc).sort();
+  document.getElementById('catChips').innerHTML =
+    `<div class="chip ${activeCat === 'alle' ? 'active' : ''}" data-cat="alle">Alle Kategorien</div>` +
+    cats.map(k => `<div class="chip ${activeCat === k ? 'active' : ''}" data-cat="${k}">${k}<span class="n">${cc[k]}</span></div>`).join('');
+
+  document.querySelectorAll('[data-status]').forEach(el =>
+    el.onclick = () => { activeStatus = el.dataset.status; buildChips(); render(); });
+  document.querySelectorAll('[data-cat]').forEach(el =>
+    el.onclick = () => { activeCat = el.dataset.cat; buildChips(); render(); });
+
+  document.getElementById('totalPill').textContent =
+    `${STILE.length} Stile · ${c.top + c.gut + c.mittel} bewertet · ${c.unbewertet} offen · ${c.raus} raus`;
+}
+
+// ── Render ───────────────────────────────────────────────────
+function matchesFilter(s) {
+  if (activeCat !== 'alle' && (s.kategorie || '—') !== activeCat) return false;
+  if (activeStatus === 'alle') return true;
+  if (activeStatus === 'fav') return !!s.favorit;
+  return stateOf(s) === activeStatus;
+}
+
+function sortStile(list) {
+  const mode = document.getElementById('sortSel').value;
+  const arr = [...list];
+  if (mode === 'name') arr.sort((a, b) => a.name.localeCompare(b.name));
+  else if (mode === 'used') arr.sort((a, b) => (b.mal_benutzt || 0) - (a.mal_benutzt || 0));
+  else if (mode === 'recent') arr.sort((a, b) => (b.zuletzt_benutzt || '').localeCompare(a.zuletzt_benutzt || ''));
+  else arr.sort((a, b) => RANK[stateOf(a)] - RANK[stateOf(b)] || a.name.localeCompare(b.name));
+  return arr;
+}
+
+function render() {
+  const root = document.getElementById('root');
+  const visible = sortStile(STILE.filter(matchesFilter));
+  if (!visible.length) { root.innerHTML = `<div class="loading">Keine Styles in diesem Filter.</div>`; return; }
+
+  root.innerHTML = visible.map(s => {
+    const st = stateOf(s);
+    const imgs = IMAGES[s.name] || [];
+    const preview = pickSpread(imgs, 9);   // 9 gleichmäßig über alle gestreut
+    const used = s.mal_benutzt
+      ? `${s.mal_benutzt}× genutzt${s.zuletzt_benutzt ? ' · ' + s.zuletzt_benutzt : ''}`
+      : 'nie genutzt';
+    const moreBadge = imgs.length > preview.length
+      ? `<span class="img-more" onclick="zoom(${s.id}, 0)">+${imgs.length - preview.length} mehr</span>` : '';
+    const imgHtml = imgs.length
+      ? preview.map(p => `<img loading="lazy" src="${p.u}" onerror="this.style.display='none'" onclick="zoom(${s.id}, ${p.i})">`).join('') + moreBadge
+      : `<div class="no-img">Noch keine Bilder generiert</div>`;
+
+    const rateBtns = ORDER.map(k => {
+      const r = RATINGS[k];
+      return `<button class="rate-btn ${st === k ? r.cls : ''}" onclick="rate(${s.id}, '${k}')">
+        <span class="rate-emoji">${r.emoji}</span>
+        <span class="rate-label">${r.label}</span>
+        <span class="w">${r.weight}</span>
+      </button>`;
+    }).join('');
+
+    return `
+    <div class="row" data-id="${s.id}">
+      <div class="info">
+        <div class="name" onclick="openGallery(${s.id})" title="Alle Bilder ansehen">${s.name}</div>
+        <div class="badges">
+          ${s.kategorie ? `<span class="badge cat">${s.kategorie}</span>` : ''}
+          <span class="badge use">${used}</span>
+        </div>
+        <div class="desc-wrap">
+          <div class="desc clamped" id="desc-${s.id}">${s.beschreibung || 'Keine Beschreibung.'}</div>
+          ${(s.beschreibung || '').length > 120 ? `<button class="desc-more" onclick="toggleDesc(${s.id}, this)">Mehr ↓</button>` : ''}
+        </div>
+      </div>
+      <div class="imgs">${imgHtml}</div>
+      <div class="rate">
+        ${rateBtns}
+        <div class="rate-foot">
+          <button class="mini-btn fav-btn ${s.favorit ? 'on' : ''}" onclick="toggleFav(${s.id})">${s.favorit ? '★ Favorit' : '☆ Favorit'}</button>
+          <button class="mini-btn" onclick="rate(${s.id}, 'reset')" title="Zurück auf unbewertet">↺ Reset</button>
+        </div>
+      </div>
+    </div>`;
+  }).join('');
+}
+
+// ── Schreiben ────────────────────────────────────────────────
+async function patch(id, body) {
+  const res = await fetch(`${SUPABASE_URL}/rest/v1/stile?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: { ...HEADERS, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' },
+    body: JSON.stringify(body),
+  });
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+}
+
+async function rate(id, key) {
+  const s = STILE.find(x => x.id === id);
+  if (!s) return;
+  const body = key === 'reset' ? { bewertung: null, aktiv: true } : RATINGS[key].db;
+  const label = key === 'reset' ? 'Reset' : RATINGS[key].label;
+
+  try {
+    await patch(id, body);
+    Object.assign(s, body);
+    buildChips(); render();
+    toast(`✓ ${s.name} → ${label}`, 'var(--gut-bg)');
+  } catch (e) { toast(`❌ Fehler: ${e.message}`, 'var(--raus-bg)'); }
+}
+
+async function toggleFav(id) {
+  const s = STILE.find(x => x.id === id);
+  if (!s) return;
+  const next = !s.favorit;
+  try {
+    await patch(id, { favorit: next });
+    s.favorit = next; buildChips(); render();
+    toast(`${next ? '★' : '☆'} ${s.name} → Favorit ${next ? 'an' : 'aus'}`, '#fdeef5');
+  } catch (e) { toast(`❌ Fehler: ${e.message}`, 'var(--raus-bg)'); }
+}
+
+// ── UI-Helfer ────────────────────────────────────────────────
+let toastT;
+function toast(msg, bg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg; el.style.background = bg || '#fff';
+  el.classList.add('show');
+  clearTimeout(toastT);
+  toastT = setTimeout(() => el.classList.remove('show'), 2600);
+}
+let lbList = [], lbIdx = 0;
+function zoom(styleId, idx) {
+  const s = STILE.find(x => x.id === styleId);
+  lbList = (s && IMAGES[s.name]) || [];
+  lbIdx = idx || 0;
+  showLb();
+  document.getElementById('lightbox').classList.add('show');
+}
+function showLb() {
+  if (!lbList.length) return;
+  lbIdx = (lbIdx + lbList.length) % lbList.length;   // wrap-around
+  document.getElementById('lightboxImg').src = lbList[lbIdx];
+  document.getElementById('lbCounter').textContent = `${lbIdx + 1} / ${lbList.length}`;
+  const multi = lbList.length > 1;
+  document.getElementById('lbPrev').style.display = multi ? '' : 'none';
+  document.getElementById('lbNext').style.display = multi ? '' : 'none';
+}
+function lbNav(d, ev) { if (ev) ev.stopPropagation(); lbIdx += d; showLb(); }
+function closeLb() { document.getElementById('lightbox').classList.remove('show'); }
+document.getElementById('lightbox').onclick = closeLb;
+document.getElementById('lightboxImg').onclick = e => e.stopPropagation();
+document.getElementById('lbPrev').onclick = e => lbNav(-1, e);
+document.getElementById('lbNext').onclick = e => lbNav(1, e);
+
+// ── Gallery Lightbox ─────────────────────────────────────────
+let galleryStyleId = null;
+function openGallery(styleId) {
+  const s = STILE.find(x => x.id === styleId);
+  if (!s) return;
+  galleryStyleId = styleId;
+  const imgs = IMAGES[s.name] || [];
+  document.getElementById('galleryTitle').textContent = s.name;
+  document.getElementById('galleryCount').textContent = imgs.length ? `${imgs.length} Bilder` : '';
+  const grid = document.getElementById('galleryGrid');
+  if (!imgs.length) {
+    grid.innerHTML = `<div class="gallery-no-img">Noch keine Bilder vorhanden.</div>`;
+  } else {
+    grid.innerHTML = imgs.map((u, i) =>
+      `<img loading="lazy" src="${u}" onerror="this.style.display='none'" onclick="zoomFromGallery(${styleId}, ${i})" title="${s.name} #${i + 1}">`
+    ).join('');
+  }
+  document.getElementById('galleryLb').classList.add('show');
+}
+function closeGallery() { document.getElementById('galleryLb').classList.remove('show'); }
+function zoomFromGallery(styleId, idx) {
+  const s = STILE.find(x => x.id === styleId);
+  lbList = (s && IMAGES[s.name]) || [];
+  lbIdx = idx;
+  showLb();
+  document.getElementById('lightbox').classList.add('show');
+}
+document.getElementById('galleryClose').onclick = closeGallery;
+document.getElementById('galleryLb').onclick = e => { if (e.target === document.getElementById('galleryLb') || e.target === document.getElementById('galleryLb').querySelector('.gallery-lb-body')) closeGallery(); };
+
+document.addEventListener('keydown', e => {
+  if (document.getElementById('lightbox').classList.contains('show')) {
+    if (e.key === 'ArrowLeft') lbNav(-1);
+    else if (e.key === 'ArrowRight') lbNav(1);
+    else if (e.key === 'Escape') closeLb();
+  } else if (document.getElementById('galleryLb').classList.contains('show')) {
+    if (e.key === 'Escape') closeGallery();
+  }
+});
+document.getElementById('sortSel').onchange = render;
+
+function toggleDesc(id, btn) {
+  const el = document.getElementById(`desc-${id}`);
+  if (!el) return;
+  const expanded = el.classList.toggle('clamped');
+  btn.textContent = expanded ? 'Mehr ↓' : 'Weniger ↑';
+}
+
+load();
+</script>
+</body>
+</html>
