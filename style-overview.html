@@ -43,26 +43,30 @@
   /* ── Sticky Header ───────────────────────────── */
   header {
     position: sticky; top: 0; z-index: 100;
-    background: rgba(251,250,252,0.92);
-    backdrop-filter: blur(8px);
+    background: var(--card);
     border-bottom: 1px solid var(--line);
-    padding: 14px 24px 10px;
+    padding: 14px 28px;
   }
-  .head-top { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; position: relative; }
-  .back-link { font-size: 0.82rem; color: var(--muted); text-decoration: none; font-weight: 600; font-family: var(--sans); }
-  .back-link:hover { color: var(--ink); }
-  h1 { font-size: 1.9rem; margin: 0; font-weight: 400; letter-spacing: -0.01em; font-family: var(--serif); line-height: 1; }
-  .head-sub { margin-top: 4px; display: flex; align-items: center; gap: 14px; }
-  .total-pill { position: absolute; left: 50%; transform: translateX(-50%); font-size: 0.75rem; color: var(--ink); font-family: var(--mono); font-weight: 300; white-space: nowrap; }
-  .head-right { margin-left: auto; display: flex; align-items: center; gap: 14px; }
+  .head-top { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+  .logo-block { display: flex; align-items: center; gap: 12px; }
+  .logo-icon { width: 30px; height: 30px; border-radius: 9px; background: linear-gradient(135deg, var(--accent), var(--accent-deep)); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 14px; }
+  .logo-name { font-size: 14px; font-weight: 600; letter-spacing: -0.2px; }
+  .logo-sub { font-size: 11px; color: var(--muted); margin-top: 1px; }
+  .mode-switcher { display: flex; background: var(--surface-alt); border: 1px solid var(--line); border-radius: 8px; padding: 2px; gap: 1px; }
+  .mode-btn { font-family: var(--sans); font-size: 12px; font-weight: 500; padding: 5px 12px; border-radius: 6px; border: none; cursor: pointer; transition: all 0.1s; background: transparent; color: var(--muted); text-decoration: none; display: inline-flex; align-items: center; }
+  .mode-btn.active { font-weight: 600; background: var(--card); color: var(--ink); box-shadow: 0 1px 2px rgba(20,16,28,0.06); }
+  .mode-btn:hover:not(.active) { color: var(--ink); }
+  .head-right { display: flex; align-items: center; gap: 14px; }
+  .total-pill { font-size: 0.75rem; color: var(--ink); font-family: var(--mono); font-weight: 300; white-space: nowrap; }
   select {
     font-family: var(--sans); font-size: 0.82rem; padding: 5px 10px;
     border: 1px solid var(--line); border-radius: 8px; background: var(--card); color: var(--ink);
     cursor: pointer;
   }
+  .head-sub { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 
   /* ── Filter chips ────────────────────────────── */
-  .chips { display: flex; gap: 4px; flex-wrap: wrap; margin-top: 8px; }
+  .chips { display: flex; gap: 4px; flex-wrap: wrap; }
   .chip {
     font-family: var(--sans); font-size: 0.7rem; padding: 3px 9px; border-radius: 20px; cursor: pointer;
     border: 1px solid var(--line); background: var(--card); color: var(--muted);
@@ -226,9 +230,20 @@
 
 <header>
   <div class="head-top">
-    <h1>Style Katalog</h1>
-    <span class="total-pill" id="totalPill">lädt …</span>
+    <div class="logo-block">
+      <div class="logo-icon">✦</div>
+      <div>
+        <div class="logo-name">INSTA Pipeline</div>
+        <div class="logo-sub">Operations</div>
+      </div>
+    </div>
+    <div class="mode-switcher">
+      <a href="index.html" class="mode-btn">Archiv</a>
+      <a href="index.html" class="mode-btn" onclick="localStorage.setItem('mode','pipeline');return true;">Pipeline</a>
+      <a href="style-overview.html" class="mode-btn active">Stil-Katalog</a>
+    </div>
     <div class="head-right">
+      <span class="total-pill" id="totalPill">lädt …</span>
       <select id="sortSel">
         <option value="rating">Sortierung: Bewertung (beste zuerst)</option>
         <option value="name">Sortierung: Name A–Z</option>
@@ -238,10 +253,9 @@
     </div>
   </div>
   <div class="head-sub">
-    <a href="index.html" class="back-link" title="Zurück zum Dashboard">← Dashboard</a>
+    <div class="chips" id="statusChips"></div>
+    <div class="chips" id="catChips"></div>
   </div>
-  <div class="chips" id="statusChips"></div>
-  <div class="chips" id="catChips"></div>
 </header>
 
 <main id="root">

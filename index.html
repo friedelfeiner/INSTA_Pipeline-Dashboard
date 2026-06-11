@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>INSTA Pipeline · Dashboard</title>
+<title>INSTA Pipeline – Floppy Trail</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
@@ -15,6 +15,29 @@
   .tab-scroll::-webkit-scrollbar { display:none; }
   .no-scrollbar { scrollbar-width:none; -webkit-overflow-scrolling:touch; }
   .no-scrollbar::-webkit-scrollbar { display:none; }
+  /* ── Stil-Katalog ── */
+  .sk-chip { font-family:'Geist',ui-sans-serif,sans-serif; font-size:0.72rem; font-weight:500; padding:5px 11px; border-radius:8px; cursor:pointer; border:1px solid transparent; background:transparent; color:#6E6780; transition:background 0.12s, color 0.12s; white-space:nowrap; display:inline-block; }
+  .sk-chip:hover { background:#F0E8FF; color:#4C1D95; }
+  .sk-chip.active { background:#F0E8FF; color:#4C1D95; font-weight:600; }
+  .sk-row { display:flex; gap:18px; align-items:stretch; background:#fff; border:1px solid #ECE6F4; border-radius:12px; padding:16px; margin:8px 0; transition:box-shadow 0.12s; }
+  .sk-row:hover { box-shadow:0 2px 12px rgba(124,58,237,0.06); }
+  .sk-name { font-family:'Instrument Serif',Georgia,serif; font-size:1.2rem; font-weight:400; line-height:1.2; margin-bottom:7px; cursor:pointer; }
+  .sk-name:hover { color:#7C3AED; }
+  .sk-rate-btn { font-family:'Geist',ui-sans-serif,sans-serif; cursor:pointer; padding:10px 6px; border-radius:12px; border:2px solid #ECE6F4; background:#fff; text-align:center; display:flex; flex-direction:column; align-items:center; gap:4px; transition:all 0.15s ease; }
+  .sk-rate-btn:hover { border-color:#7C3AED; transform:translateY(-1px); }
+  .sk-rate-btn.on-top    { background:#FEF3C7; border-color:#d97706; transform:translateY(-2px); box-shadow:0 4px 12px rgba(217,119,6,0.22); }
+  .sk-rate-btn.on-gut    { background:#DCFCE7; border-color:#15803d; transform:translateY(-2px); box-shadow:0 4px 12px rgba(21,128,61,0.22); }
+  .sk-rate-btn.on-mittel { background:#eef1f5; border-color:#64748b; transform:translateY(-2px); box-shadow:0 4px 12px rgba(100,116,139,0.18); }
+  .sk-rate-btn.on-raus   { background:#FEE2E2; border-color:#B91C1C; transform:translateY(-2px); box-shadow:0 4px 12px rgba(185,28,28,0.18); }
+  .sk-mini-btn { font-family:'Geist',ui-sans-serif,sans-serif; font-size:0.74rem; padding:6px 8px; border-radius:7px; cursor:pointer; border:1px solid #ECE6F4; background:#fff; color:#6E6780; flex:1; text-align:center; transition:all 0.12s; }
+  .sk-mini-btn:hover { border-color:#7C3AED; color:#7C3AED; }
+  .sk-fav-btn.on { background:#fdeef5; border-color:#db2777; color:#db2777; font-weight:700; }
+  .sk-img-more { flex-shrink:0; align-self:center; font-family:'Geist',ui-sans-serif,sans-serif; font-size:0.8rem; font-weight:600; color:#6E6780; background:#fff; border:1px dashed #ECE6F4; border-radius:8px; padding:0 14px; height:200px; display:flex; align-items:center; cursor:pointer; white-space:nowrap; }
+  .sk-img-more:hover { border-color:#7C3AED; color:#7C3AED; }
+  .sk-desc-more { display:inline-block; margin-top:4px; font-size:0.74rem; color:#7C3AED; background:none; border:none; cursor:pointer; padding:0; font-weight:600; font-family:'Geist',ui-sans-serif,sans-serif; }
+  .sk-desc-more:hover { text-decoration:underline; }
+  .sk-gallery-grid img { height:200px; border-radius:7px; box-shadow:0 2px 10px rgba(0,0,0,0.35); cursor:zoom-in; transition:opacity 0.12s,transform 0.12s; flex-shrink:0; }
+  .sk-gallery-grid img:hover { opacity:0.88; transform:scale(1.02); }
 </style>
 </head>
 <body>
@@ -1558,38 +1581,37 @@ function Lightbox({ fotos, startIdx, onClose }) {
 }
 
 // ─── Style Review Tab (inline) ─────────────────────────────────────────────────────────
+// value = was in etappen.stil_bewertung gespeichert wird (aligned mit stile.bewertung)
+// 0=Raus, 1=Mittel, 2=Gut, 4=Top
 const STYLE_RATINGS = [
-  { value: 1, emoji: '❌', label: 'Nicht nutzen', color: T.err,    bg: T.errSoft,    border: '#7F1D1D' },
-  { value: 2, emoji: '👍', label: 'Gut',          color: T.muted,  bg: T.surfaceAlt, border: T.border },
-  { value: 3, emoji: '🔥', label: 'Feuer',        color: T.ok,     bg: T.okSoft,     border: '#14532D' },
+  { value: 0, emoji: '❌', label: 'Raus',   cls: 'on-raus',   stilUpdate: { aktiv: false, bewertung: null } },
+  { value: 1, emoji: '🟡', label: 'Mittel', cls: 'on-mittel', stilUpdate: { aktiv: true,  bewertung: 1    } },
+  { value: 2, emoji: '👍', label: 'Gut',    cls: 'on-gut',    stilUpdate: { aktiv: true,  bewertung: 2    } },
+  { value: 4, emoji: '🔥', label: 'Top',    cls: 'on-top',    stilUpdate: { aktiv: true,  bewertung: 4    } },
 ];
 
 function TabStyleReview({ data, selectedEtappe }) {
   const mobile = useMobile();
   const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
 
-  const [detail, setDetail]   = React.useState(null);
-  const [fotos, setFotos]     = React.useState([]);
-  const [loading, setLoading] = React.useState(false);
-  const [rating, setRating]   = React.useState(null);
-  const [notiz, setNotiz]     = React.useState('');
-  const [saving, setSaving]   = React.useState(false);
-  const [saveMsg, setSaveMsg] = React.useState(null);
-  const [lightbox, setLightbox]   = React.useState(null);
-  const [stilInfo, setStilInfo]   = React.useState(null);
+  const [fotos, setFotos]       = React.useState([]);
+  const [loading, setLoading]   = React.useState(false);
+  const [rating, setRating]     = React.useState(null);
+  const [saving, setSaving]     = React.useState(false);
+  const [saveMsg, setSaveMsg]   = React.useState(null);
+  const [lightbox, setLightbox] = React.useState(null);
+  const [stilInfo, setStilInfo] = React.useState(null);
 
   React.useEffect(() => {
     if (!curE?.id) return;
-    setLoading(true); setDetail(null); setFotos([]); setRating(null); setNotiz(''); setSaveMsg(null); setStilInfo(null);
+    setLoading(true); setFotos([]); setRating(null); setSaveMsg(null); setStilInfo(null);
     const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
     Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}&select=id,stil_bewertung,stil_notiz&limit=1`, { headers: h }).then(r => r.json()).then(rows => rows[0] || null),
+      fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}&select=id,stil_bewertung&limit=1`, { headers: h }).then(r => r.json()).then(rows => rows[0] || null),
       fetch(`${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${curE.id}&bildgen_url=not.is.null&select=foto_nr,bildgen_url,tagesstil&order=foto_nr.asc`, { headers: h }).then(r => r.json()),
     ]).then(([det, f]) => {
-      setDetail(det);
       setFotos(f);
       if (det?.stil_bewertung != null) setRating(det.stil_bewertung);
-      if (det?.stil_notiz)             setNotiz(det.stil_notiz);
       const tagesstil = f.length > 0 ? f[0].tagesstil : null;
       if (tagesstil) {
         fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}&select=name,bewertung,aktiv,mal_benutzt&limit=1`, { headers: h })
@@ -1598,31 +1620,24 @@ function TabStyleReview({ data, selectedEtappe }) {
     }).finally(() => setLoading(false));
   }, [curE?.id]);
 
-  async function handleSave() {
-    if (!curE || rating === null || saving) return;
-    setSaving(true); setSaveMsg(null);
+  async function handleRate(r) {
+    if (!curE || saving) return;
+    setRating(r.value); setSaving(true); setSaveMsg(null);
     const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' };
     try {
-      // 1. Etappe: stil_bewertung + stil_notiz
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}`, {
+      await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}`, {
         method: 'PATCH', headers: h,
-        body: JSON.stringify({ stil_bewertung: rating, stil_notiz: notiz || null }),
+        body: JSON.stringify({ stil_bewertung: r.value, stil_notiz: null }),
       });
-      if (!res.ok) throw new Error(`${res.status}`);
-      // 2. Stile-Tabelle: bewertung + aktiv setzen (❌→aus, 👍→2, 🔥→4)
-      // rating-Werte: 1 = ❌ Nicht nutzen, 2 = 👍 Gut, 3 = 🔥 Feuer
       const tagesstil = fotos.length > 0 ? fotos[0].tagesstil : null;
       if (tagesstil) {
-        const stilUpdate = rating === 1
-          ? { aktiv: false, bewertung: null }
-          : { aktiv: true, bewertung: rating === 3 ? 4 : 2 };
         await fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}`, {
-          method: 'PATCH', headers: h,
-          body: JSON.stringify(stilUpdate),
+          method: 'PATCH', headers: h, body: JSON.stringify(r.stilUpdate),
         });
+        setStilInfo(prev => prev ? { ...prev, ...r.stilUpdate } : prev);
       }
-      setSaveMsg({ text: '✓ Bewertung gespeichert', type: 'ok' });
-      setTimeout(() => setSaveMsg(null), 4000);
+      setSaveMsg({ text: `✓ ${r.emoji} ${r.label}`, type: 'ok' });
+      setTimeout(() => setSaveMsg(null), 3000);
     } catch (err) {
       setSaveMsg({ text: `Fehler: ${err.message}`, type: 'error' });
     } finally { setSaving(false); }
@@ -1701,52 +1716,25 @@ function TabStyleReview({ data, selectedEtappe }) {
 
       {/* Bewertung */}
       <Panel>
-        <PanelHeader icon={ISparkles} label="Bewertung" serif="Wie war der Stil?" />
-        <div style={{ display: 'flex', gap: mobile ? 8 : 12, flexWrap: 'wrap', marginBottom: 20 }}>
-          {STYLE_RATINGS.map(r => (
-            <button key={r.value} onClick={() => setRating(r.value)} style={{
-              display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 7,
-              padding: mobile ? '12px 20px' : '14px 32px', cursor: 'pointer', borderRadius: 12,
-              border: `2px solid ${rating === r.value ? r.border : T.border}`,
-              background: rating === r.value ? r.bg : T.surface,
-              transform: rating === r.value ? 'translateY(-2px)' : 'none',
-              boxShadow: rating === r.value ? `0 4px 16px ${r.bg}` : 'none',
-              transition: 'all 0.15s ease', minWidth: mobile ? 90 : 110, flex: mobile ? 1 : 'none',
-            }}>
-              <span style={{ fontSize: mobile ? 24 : 30, lineHeight: 1 }}>{r.emoji}</span>
-              <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 600, letterSpacing: 0.2,
-                color: rating === r.value ? r.color : T.muted, textTransform: 'uppercase' }}>{r.label}</span>
-            </button>
-          ))}
-        </div>
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 11, fontWeight: 600, color: T.mutedSoft,
-            textTransform: 'uppercase', letterSpacing: 0.6, marginBottom: 8 }}>Notiz (optional)</div>
-          <textarea value={notiz} onChange={e => setNotiz(e.target.value)}
-            placeholder="Anmerkung zum Stil…" rows={3}
-            style={{ width: '100%', fontFamily: T.sans, fontSize: 13, color: T.ink,
-              background: T.surfaceAlt, border: `1px solid ${T.border}`,
-              borderRadius: 8, padding: '10px 12px', resize: 'vertical', outline: 'none', lineHeight: 1.5 }} />
-        </div>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 12 }}>
-          {saveMsg ? (
-            <div style={{ padding: '8px 14px', borderRadius: 8, fontFamily: T.sans, fontSize: 12, fontWeight: 500,
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
+          <PanelHeader icon={ISparkles} label="Bewertung" serif="Wie war der Stil?" />
+          {saveMsg && (
+            <div style={{ padding: '6px 12px', borderRadius: 8, fontFamily: T.sans, fontSize: 12, fontWeight: 500,
               background: saveMsg.type === 'ok' ? T.okSoft : T.errSoft,
-              color: saveMsg.type === 'ok' ? T.ok : T.err,
-              border: `1px solid ${saveMsg.type === 'ok' ? '#166534' : T.err}` }}>
+              color: saveMsg.type === 'ok' ? T.ok : T.err }}>
               {saveMsg.text}
             </div>
-          ) : <div />}
-          <button onClick={handleSave} disabled={saving || rating === null} style={{
-            fontFamily: T.sans, fontSize: 14, fontWeight: 600,
-            padding: '12px 28px', borderRadius: 10, border: 'none',
-            background: rating !== null && !saving ? T.accent : T.surfaceAlt,
-            color: rating !== null && !saving ? '#fff' : T.mutedSoft,
-            cursor: rating !== null && !saving ? 'pointer' : 'not-allowed',
-            opacity: saving ? 0.7 : 1, transition: 'background 0.15s',
-          }}>
-            {saving ? 'Speichern…' : 'Bewertung speichern'}
-          </button>
+          )}
+        </div>
+        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, maxWidth: 360, opacity: saving ? 0.6 : 1, transition: 'opacity 0.15s' }}>
+          {STYLE_RATINGS.map(r => (
+            <button key={r.value} onClick={() => handleRate(r)}
+              className={`sk-rate-btn${rating === r.value ? ' ' + r.cls : ''}`}
+              style={{ padding: '12px 8px' }}>
+              <span style={{ fontSize: '1.6rem', lineHeight: 1 }}>{r.emoji}</span>
+              <span style={{ fontFamily: T.sans, fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: T.muted }}>{r.label}</span>
+            </button>
+          ))}
         </div>
       </Panel>
 
@@ -1758,21 +1746,328 @@ function TabStyleReview({ data, selectedEtappe }) {
   );
 }
 
-// ─── Time scope switcher ──────────────────────────────────────────────────────
-function ScopeSwitcher({ scope, onChange }) {
+// ─── Stil-Katalog ─────────────────────────────────────────────────────────────
+const SK_RATINGS = {
+  top:    { emoji: '🔥', label: 'Top',    db: { bewertung: 4, aktiv: true },    weight: '4×', cls: 'on-top' },
+  gut:    { emoji: '👍', label: 'Gut',    db: { bewertung: 2, aktiv: true },    weight: '2×', cls: 'on-gut' },
+  mittel: { emoji: '🟡', label: 'Mittel', db: { bewertung: 1, aktiv: true },    weight: '1×', cls: 'on-mittel' },
+  raus:   { emoji: '❌', label: 'Raus',   db: { bewertung: null, aktiv: false }, weight: '0×', cls: 'on-raus' },
+};
+const SK_ORDER = ['top', 'gut', 'mittel', 'raus'];
+const SK_RANK  = { top: 0, gut: 1, mittel: 2, unbewertet: 3, raus: 4 };
+let _skCache = null;
+
+function skStateOf(s) {
+  if (s.aktiv === false) return 'raus';
+  if (s.bewertung === 4) return 'top';
+  if (s.bewertung === 2) return 'gut';
+  if (s.bewertung === 1) return 'mittel';
+  return 'unbewertet';
+}
+function skPickSpread(arr, n) {
+  if (arr.length <= n) return arr.map((u, i) => ({ u, i }));
+  const out = [];
+  for (let k = 0; k < n; k++) {
+    const i = Math.round(k * (arr.length - 1) / (n - 1));
+    if (!out.some(o => o.i === i)) out.push({ u: arr[i], i });
+  }
+  return out;
+}
+function skFileUrl(p) {
+  return 'file://' + p.split('/').map(encodeURIComponent).join('/');
+}
+
+function TabStilKatalog() {
+  const [stile, setStile]           = React.useState(_skCache ? _skCache.stile : []);
+  const [images, setImages]         = React.useState(_skCache ? _skCache.images : {});
+  const [loading, setLoading]       = React.useState(!_skCache);
+  const [error, setError]           = React.useState(null);
+  const [activeStatus, setActiveStatus] = React.useState('alle');
+  const [activeCat, setActiveCat]   = React.useState('alle');
+  const [sort, setSort]             = React.useState('rating');
+  const [toast, setToast]           = React.useState(null);
+  const [lb, setLb]                 = React.useState(null);   // { list, idx }
+  const [gallery, setGallery]       = React.useState(null);   // { styleId }
+  const [expandedDescs, setExpandedDescs] = React.useState({});
+  const toastTimer = React.useRef(null);
+
+  React.useEffect(() => {
+    if (_skCache) return;
+    const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
+    Promise.all([
+      fetch(`${SUPABASE_URL}/rest/v1/stile?select=*&order=name`, { headers: h }).then(r => r.json()),
+      fetch(`${SUPABASE_URL}/rest/v1/fotos?select=tagesstil,bildgen_url,foto_nr&bildgen_url=not.is.null&order=foto_nr&limit=3000`, { headers: h }).then(r => r.json()),
+      fetch(`${SUPABASE_URL}/rest/v1/fotos?select=tagesstil,bildgen_datei,foto_nr&bildgen_datei=not.is.null&bildgen_url=is.null&order=foto_nr&limit=3000`, { headers: h }).then(r => r.json()),
+    ]).then(([stileRows, urlRows, localRows]) => {
+      const imgs = {};
+      const add = (style, src) => {
+        if (!style || !src) return;
+        const list = (imgs[style] = imgs[style] || []);
+        if (list.length < 150 && !list.includes(src)) list.push(src);
+      };
+      stileRows.forEach(s => { if (Array.isArray(s.review_bilder)) s.review_bilder.forEach(u => add(s.name, u)); });
+      urlRows.forEach(r => add(r.tagesstil, r.bildgen_url));
+      localRows.forEach(r => add(r.tagesstil, skFileUrl(r.bildgen_datei)));
+      _skCache = { stile: stileRows, images: imgs };
+      setStile(stileRows);
+      setImages(imgs);
+      setLoading(false);
+    }).catch(e => { setError(e.message); setLoading(false); });
+  }, []);
+
+  const showToast = React.useCallback((msg, bg) => {
+    setToast({ msg, bg: bg || '#fff' });
+    clearTimeout(toastTimer.current);
+    toastTimer.current = setTimeout(() => setToast(null), 2600);
+  }, []);
+
+  const skPatch = React.useCallback(async (id, body) => {
+    const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' };
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/stile?id=eq.${id}`, { method: 'PATCH', headers: h, body: JSON.stringify(body) });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  }, []);
+
+  const skRate = React.useCallback(async (id, key) => {
+    const s = stile.find(x => x.id === id);
+    if (!s) return;
+    const body = key === 'reset' ? { bewertung: null, aktiv: true } : SK_RATINGS[key].db;
+    try {
+      await skPatch(id, body);
+      const updated = stile.map(x => x.id === id ? { ...x, ...body } : x);
+      setStile(updated);
+      if (_skCache) _skCache.stile = updated;
+      showToast(`✓ ${s.name} → ${key === 'reset' ? 'Reset' : SK_RATINGS[key].label}`, T.okSoft);
+    } catch (e) { showToast(`❌ Fehler: ${e.message}`, T.errSoft); }
+  }, [stile, skPatch, showToast]);
+
+  const skToggleFav = React.useCallback(async (id) => {
+    const s = stile.find(x => x.id === id);
+    if (!s) return;
+    const next = !s.favorit;
+    try {
+      await skPatch(id, { favorit: next });
+      const updated = stile.map(x => x.id === id ? { ...x, favorit: next } : x);
+      setStile(updated);
+      if (_skCache) _skCache.stile = updated;
+      showToast(`${next ? '★' : '☆'} ${s.name} → Favorit ${next ? 'an' : 'aus'}`, '#fdeef5');
+    } catch (e) { showToast(`❌ Fehler: ${e.message}`, T.errSoft); }
+  }, [stile, skPatch, showToast]);
+
+  React.useEffect(() => {
+    const handler = e => {
+      if (lb) {
+        if (e.key === 'ArrowLeft')  setLb(p => ({ ...p, idx: (p.idx - 1 + p.list.length) % p.list.length }));
+        if (e.key === 'ArrowRight') setLb(p => ({ ...p, idx: (p.idx + 1) % p.list.length }));
+        if (e.key === 'Escape')     setLb(null);
+      } else if (gallery) {
+        if (e.key === 'Escape') setGallery(null);
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [lb, gallery]);
+
+  const counts = React.useMemo(() => {
+    const c = { alle: stile.length, unbewertet: 0, top: 0, gut: 0, mittel: 0, raus: 0, fav: 0 };
+    stile.forEach(s => { c[skStateOf(s)]++; if (s.favorit) c.fav++; });
+    return c;
+  }, [stile]);
+
+  const catCounts = React.useMemo(() => {
+    const c = {};
+    stile.forEach(s => { const k = s.kategorie || '—'; c[k] = (c[k] || 0) + 1; });
+    return c;
+  }, [stile]);
+
+  const visible = React.useMemo(() => {
+    const filtered = stile.filter(s => {
+      if (activeCat !== 'alle' && (s.kategorie || '—') !== activeCat) return false;
+      if (activeStatus === 'alle')  return true;
+      if (activeStatus === 'fav')   return !!s.favorit;
+      return skStateOf(s) === activeStatus;
+    });
+    const arr = [...filtered];
+    if (sort === 'name')   arr.sort((a, b) => a.name.localeCompare(b.name));
+    else if (sort === 'used')   arr.sort((a, b) => (b.mal_benutzt || 0) - (a.mal_benutzt || 0));
+    else if (sort === 'recent') arr.sort((a, b) => (b.zuletzt_benutzt || '').localeCompare(a.zuletzt_benutzt || ''));
+    else arr.sort((a, b) => SK_RANK[skStateOf(a)] - SK_RANK[skStateOf(b)] || a.name.localeCompare(b.name));
+    return arr;
+  }, [stile, activeStatus, activeCat, sort]);
+
+  const STATUS_DEFS = [
+    ['alle','Alle'],['unbewertet','⚪ Unbewertet'],['top','🔥 Top'],
+    ['gut','👍 Gut'],['mittel','🟡 Mittel'],['raus','❌ Raus'],['fav','⭐ Favoriten'],
+  ];
+  const cats = Object.keys(catCounts).sort();
+  const galleryStyle = gallery ? stile.find(s => s.id === gallery.styleId) : null;
+  const galleryImgs  = galleryStyle ? (images[galleryStyle.name] || []) : [];
+
   return (
-    <div style={{ display: 'flex', gap: 4, background: T.surfaceAlt, padding: 3, borderRadius: 8 }}>
-      {['Heute', '28 Tage', 'Reise'].map((l, i) => (
-        <div key={l} onClick={() => onChange(l)}
-          style={{ padding: '6px 12px', borderRadius: 5, cursor: 'pointer',
-            background: scope === l ? T.surface : 'transparent',
-            color: scope === l ? T.ink : T.muted,
-            boxShadow: scope === l ? '0 1px 2px rgba(20,16,28,0.06)' : 'none',
-            fontSize: 12, fontWeight: 500, transition: 'all 0.1s' }}>{l}</div>
-      ))}
+    <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
+      {/* Filter bar */}
+      <div style={{ padding: '10px 28px', borderBottom: `1px solid ${T.border}`, background: T.surface, flexShrink: 0 }}>
+        <div style={{ display: 'flex', alignItems: 'flex-start', gap: 12 }}>
+          <div style={{ flex: 1, display: 'flex', flexDirection: 'column', gap: 4 }}>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              {STATUS_DEFS.map(([k, lbl]) => (
+                <div key={k} className={`sk-chip${activeStatus === k ? ' active' : ''}`} onClick={() => setActiveStatus(k)}>
+                  {lbl}<span style={{ opacity: activeStatus === k ? 0.85 : 0.6, marginLeft: 3, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>{counts[k] ?? 0}</span>
+                </div>
+              ))}
+            </div>
+            <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+              <div className={`sk-chip${activeCat === 'alle' ? ' active' : ''}`} onClick={() => setActiveCat('alle')}>Alle Kategorien</div>
+              {cats.map(k => (
+                <div key={k} className={`sk-chip${activeCat === k ? ' active' : ''}`} onClick={() => setActiveCat(k)}>
+                  {k}<span style={{ opacity: activeCat === k ? 0.85 : 0.6, marginLeft: 3, fontFamily: T.mono, fontVariantNumeric: 'tabular-nums' }}>{catCounts[k]}</span>
+                </div>
+              ))}
+            </div>
+            <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, paddingTop: 2 }}>
+              {loading ? 'Lade …' : `${stile.length} Stile · ${counts.top + counts.gut + counts.mittel} bewertet · ${counts.unbewertet} offen · ${counts.raus} raus`}
+            </span>
+          </div>
+          <select value={sort} onChange={e => setSort(e.target.value)}
+            style={{ flexShrink: 0, fontFamily: T.sans, fontSize: 12, padding: '4px 8px', border: `1px solid ${T.border}`, borderRadius: 7, background: T.surface, color: T.ink, cursor: 'pointer' }}>
+            <option value="rating">Bewertung</option>
+            <option value="name">Name A–Z</option>
+            <option value="used">Meist genutzt</option>
+            <option value="recent">Zuletzt genutzt</option>
+          </select>
+        </div>
+      </div>
+
+      {/* List */}
+      <div style={{ flex: 1, overflow: 'auto', padding: '8px 28px 80px' }}>
+        {loading && <div style={{ padding: 60, textAlign: 'center', color: T.muted, fontFamily: T.sans }}>Lade Styles aus Supabase …</div>}
+        {error   && <div style={{ padding: 60, textAlign: 'center', color: T.err,  fontFamily: T.sans }}>❌ {error}</div>}
+        {!loading && !error && !visible.length && <div style={{ padding: 60, textAlign: 'center', color: T.muted, fontFamily: T.sans }}>Keine Styles in diesem Filter.</div>}
+        {visible.map(s => {
+          const st = skStateOf(s);
+          const imgs = images[s.name] || [];
+          const preview = skPickSpread(imgs, 9);
+          const used = s.mal_benutzt
+            ? `${s.mal_benutzt}× genutzt${s.zuletzt_benutzt ? ' · ' + s.zuletzt_benutzt : ''}`
+            : 'nie genutzt';
+          return (
+            <div key={s.id} className="sk-row">
+              {/* Info */}
+              <div style={{ width: 250, flexShrink: 0 }}>
+                <div className="sk-name" onClick={() => setGallery({ styleId: s.id })} title="Alle Bilder ansehen">{s.name}</div>
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 9 }}>
+                  {s.kategorie && <span style={{ fontFamily: T.mono, fontSize: '0.68rem', padding: '2px 7px', borderRadius: 5, background: T.accentSoft, color: T.accentInk, fontWeight: 600 }}>{s.kategorie}</span>}
+                  <span style={{ fontFamily: T.mono, fontSize: '0.68rem', padding: '2px 7px', borderRadius: 5, background: T.okSoft, color: T.ok, fontWeight: 600 }}>{used}</span>
+                </div>
+                <div style={{ fontFamily: T.sans, fontSize: '0.8rem', color: T.muted, lineHeight: 1.55,
+                  ...(expandedDescs[s.id] ? {} : { display: '-webkit-box', WebkitBoxOrient: 'vertical', WebkitLineClamp: 3, overflow: 'hidden' }) }}>
+                  {s.beschreibung || 'Keine Beschreibung.'}
+                </div>
+                {(s.beschreibung || '').length > 120 && (
+                  <button className="sk-desc-more" onClick={() => setExpandedDescs(p => ({ ...p, [s.id]: !p[s.id] }))}>
+                    {expandedDescs[s.id] ? 'Weniger ↑' : 'Mehr ↓'}
+                  </button>
+                )}
+              </div>
+              {/* Images */}
+              <div style={{ display: 'flex', gap: 8, flexGrow: 1, overflowX: 'auto', background: T.surfaceAlt, borderRadius: 9, padding: 8, alignItems: 'center', minHeight: 160 }}>
+                {imgs.length === 0
+                  ? <div style={{ color: T.mutedSoft, fontStyle: 'italic', fontSize: '0.82rem', width: '100%', textAlign: 'center', fontFamily: T.sans }}>Noch keine Bilder generiert</div>
+                  : <>
+                      {preview.map(p => (
+                        <img key={p.i} loading="lazy" src={p.u} onError={e => e.target.style.display = 'none'}
+                          style={{ height: 200, borderRadius: 6, boxShadow: '0 1px 5px rgba(0,0,0,0.1)', cursor: 'zoom-in', flexShrink: 0 }}
+                          onClick={() => setLb({ list: imgs, idx: p.i })} />
+                      ))}
+                      {imgs.length > preview.length && (
+                        <div className="sk-img-more" onClick={() => setGallery({ styleId: s.id })}>
+                          +{imgs.length - preview.length} mehr
+                        </div>
+                      )}
+                    </>
+                }
+              </div>
+              {/* Rating */}
+              <div style={{ width: 160, flexShrink: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, alignContent: 'start' }}>
+                {SK_ORDER.map(k => {
+                  const r = SK_RATINGS[k];
+                  return (
+                    <button key={k} className={`sk-rate-btn${st === k ? ' ' + r.cls : ''}`} onClick={() => skRate(s.id, k)}>
+                      <span style={{ fontSize: '1.35rem', lineHeight: 1 }}>{r.emoji}</span>
+                      <span style={{ fontFamily: T.sans, fontSize: '0.65rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: T.muted }}>{r.label}</span>
+                      <span style={{ fontFamily: T.mono, fontSize: '0.6rem', color: T.mutedSoft }}>{r.weight}</span>
+                    </button>
+                  );
+                })}
+                <div style={{ display: 'flex', gap: 6, marginTop: 2, gridColumn: '1 / -1' }}>
+                  <button className={`sk-mini-btn sk-fav-btn${s.favorit ? ' on' : ''}`} onClick={() => skToggleFav(s.id)}>
+                    {s.favorit ? '★ Favorit' : '☆ Favorit'}
+                  </button>
+                  <button className="sk-mini-btn" onClick={() => skRate(s.id, 'reset')} title="Zurück auf unbewertet">↺ Reset</button>
+                </div>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Toast */}
+      {toast && (
+        <div style={{ position: 'fixed', bottom: 22, left: '50%', transform: 'translateX(-50%)',
+          padding: '10px 18px', borderRadius: 9, fontFamily: T.sans, fontSize: '0.85rem', zIndex: 1000,
+          boxShadow: '0 6px 22px rgba(124,58,237,0.16)', background: toast.bg, color: T.ink, pointerEvents: 'none' }}>
+          {toast.msg}
+        </div>
+      )}
+
+      {/* Gallery lightbox */}
+      {gallery && galleryStyle && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(10,8,18,0.95)', zIndex: 3000, display: 'flex', flexDirection: 'column', overflow: 'hidden' }}
+          onClick={e => { if (e.target === e.currentTarget) setGallery(null); }}>
+          <div style={{ flexShrink: 0, display: 'flex', alignItems: 'center', gap: 16, padding: '16px 28px 12px', borderBottom: '1px solid rgba(255,255,255,0.08)' }}>
+            <span style={{ fontFamily: T.serif, fontSize: '1.6rem', color: '#fff', fontWeight: 400 }}>{galleryStyle.name}</span>
+            <span style={{ fontFamily: T.mono, fontSize: '0.78rem', color: 'rgba(255,255,255,0.4)' }}>{galleryImgs.length ? `${galleryImgs.length} Bilder` : ''}</span>
+            <button onClick={() => setGallery(null)}
+              style={{ marginLeft: 'auto', background: 'rgba(255,255,255,0.1)', border: 'none', color: '#fff', fontSize: '1.4rem', width: 38, height: 38, borderRadius: 9, cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>✕</button>
+          </div>
+          <div style={{ flex: 1, overflowY: 'auto', padding: '20px 28px 40px' }}>
+            {galleryImgs.length === 0
+              ? <div style={{ color: 'rgba(255,255,255,0.3)', fontStyle: 'italic', fontFamily: T.sans, padding: '60px 0' }}>Noch keine Bilder vorhanden.</div>
+              : <div className="sk-gallery-grid" style={{ display: 'flex', flexWrap: 'wrap', gap: 8, alignItems: 'flex-start' }}>
+                  {galleryImgs.map((u, i) => (
+                    <img key={i} loading="lazy" src={u} onError={e => e.target.style.display = 'none'}
+                      title={`${galleryStyle.name} #${i + 1}`}
+                      onClick={() => setLb({ list: galleryImgs, idx: i })} />
+                  ))}
+                </div>
+            }
+          </div>
+        </div>
+      )}
+
+      {/* Single-image lightbox */}
+      {lb && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.86)', zIndex: 4000, display: 'flex', alignItems: 'center', justifyContent: 'center', cursor: 'zoom-out' }}
+          onClick={() => setLb(null)}>
+          {lb.list.length > 1 && (
+            <button onClick={e => { e.stopPropagation(); setLb(p => ({ ...p, idx: (p.idx - 1 + p.list.length) % p.list.length })); }}
+              style={{ position: 'fixed', top: '50%', left: '3vw', transform: 'translateY(-50%)', zIndex: 4001, width: 54, height: 84, border: 'none', borderRadius: 10, background: 'rgba(255,255,255,0.12)', color: '#fff', fontSize: '2.2rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>‹</button>
+          )}
+          <img src={lb.list[lb.idx]} style={{ maxWidth: '86vw', maxHeight: '92vh', borderRadius: 8, cursor: 'default' }} onClick={e => e.stopPropagation()} />
+          {lb.list.length > 1 && (
+            <button onClick={e => { e.stopPropagation(); setLb(p => ({ ...p, idx: (p.idx + 1) % p.list.length })); }}
+              style={{ position: 'fixed', top: '50%', right: '3vw', transform: 'translateY(-50%)', zIndex: 4001, width: 54, height: 84, border: 'none', borderRadius: 10, background: 'rgba(255,255,255,0.12)', color: '#fff', fontSize: '2.2rem', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>›</button>
+          )}
+          {lb.list.length > 1 && (
+            <div style={{ position: 'fixed', bottom: '4vh', left: '50%', transform: 'translateX(-50%)', zIndex: 4001, color: '#fff', fontSize: '0.9rem', background: 'rgba(0,0,0,0.45)', padding: '5px 14px', borderRadius: 20, fontVariantNumeric: 'tabular-nums' }}>
+              {lb.idx + 1} / {lb.list.length}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
+
 
 // ─── Monolog Panel ────────────────────────────────────────────────────────────
 function MonologPanel() {
@@ -2080,7 +2375,7 @@ function TabHitl2() {
 const ARCHIV_TABS = [
   { id: 'uebersicht',  label: 'Übersicht',   Icon: IDash,      Content: TabUebersicht },
   { id: 'kosten',      label: 'Kosten',      Icon: ICoins,     Content: TabKosten },
-  { id: 'stylereview', label: 'Style Review',Icon: ISparkles,  Content: TabStyleReview },
+  { id: 'stylereview', label: 'Stil',         Icon: ISparkles,  Content: TabStyleReview },
   { id: 'performance', label: 'Performance', Icon: IGauge,     Content: TabPerformance },
   { id: 'reliability', label: 'Reliability', Icon: IShield,    Content: TabReliability },
 ];
@@ -2095,8 +2390,7 @@ const PIPELINE_TABS = [
 function App() {
   const mobile = useMobile();
   const [tab, setTab]         = useState('uebersicht');
-  const [scope, setScope]     = useState('Heute');
-  const [mode, setMode] = useState('archiv');      // 'archiv' | 'pipeline'
+  const [mode, setMode] = useState('archiv');      // 'archiv' | 'pipeline' | 'stil-katalog'
   const [pipelineTab, setPipelineTab] = useState('monolog');
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
@@ -2104,6 +2398,7 @@ function App() {
   const [selectedIdx, setSelectedIdx] = useState(null);
   const [steps, setSteps]     = useState([]);
   const [runEtappeId, setRunEtappeId] = useState(null);
+  const [routeDropdownOpen, setRouteDropdownOpen] = useState(false);
 
   React.useEffect(() => {
     Promise.all([fetchEtappen(), fetchRouten()])
@@ -2131,6 +2426,36 @@ function App() {
     const iv = setInterval(() => loadSteps(runEtappeId), 5000);
     return () => clearInterval(iv);
   }, [isRunning, runEtappeId]);
+
+  React.useEffect(() => {
+    const handler = e => {
+      if (mode !== 'archiv') return;
+      if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
+      const max = (data?.etappenList?.length ?? 1) - 1;
+      setSelectedIdx(i => {
+        const cur = i ?? max;
+        if (e.key === 'ArrowLeft')  return Math.max(0, cur - 1);
+        if (e.key === 'ArrowRight') return Math.min(max, cur + 1);
+        return i;
+      });
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [mode, data]);
+
+  const routes = React.useMemo(() => {
+    if (!data) return [];
+    const seen = new Set();
+    return data.etappenList
+      .filter(e => { if (!e.route || seen.has(e.route)) return false; seen.add(e.route); return true; })
+      .map(e => ({
+        route:     e.route,
+        kuerzel:   e.kuerzel || '–',
+        routeName: e.routeName || e.kuerzel || '–',
+        count:     data.etappenList.filter(x => x.route === e.route).length,
+        firstIdx:  data.etappenList.findIndex(x => x.route === e.route),
+      }));
+  }, [data]);
 
   if (loading) return (
     <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', fontFamily: T.sans, color: T.muted, fontSize: 14 }}>
@@ -2168,13 +2493,13 @@ function App() {
               <ISparkles size={15} sw={2} />
             </div>
             <div>
-              <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: -0.2 }}>INSTA Pipeline</div>
+              <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: -0.2 }}>INSTA Pipeline <span style={{ fontWeight: 400, color: T.muted }}>| Floppy Trail</span></div>
               <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>Operations</div>
             </div>
           </div>
           {/* Mode-Switcher */}
           <div style={{ display: 'flex', background: T.surfaceAlt, border: `1px solid ${T.border}`, borderRadius: 8, padding: 2, gap: 1 }}>
-            {[['archiv', 'Archiv'], ['pipeline', 'Pipeline']].map(([m, label]) => (
+            {[['archiv', 'Etappen'], ['pipeline', 'Pipeline']].map(([m, label]) => (
               <button key={m} onClick={() => setMode(m)}
                 style={{ fontFamily: T.sans, fontSize: 12, fontWeight: mode === m ? 600 : 500, padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', transition: 'all 0.1s',
                   background: mode === m ? T.surface : 'transparent',
@@ -2183,9 +2508,16 @@ function App() {
                 {label}
               </button>
             ))}
+            <button onClick={() => setMode('stil-katalog')}
+              style={{ fontFamily: T.sans, fontSize: 12, fontWeight: mode === 'stil-katalog' ? 600 : 500, padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', transition: 'all 0.1s',
+                background: mode === 'stil-katalog' ? T.surface : 'transparent',
+                color: mode === 'stil-katalog' ? T.ink : T.muted,
+                boxShadow: mode === 'stil-katalog' ? '0 1px 2px rgba(20,16,28,0.06)' : 'none' }}>
+              Style-Katalog
+            </button>
           </div>
           {/* Right button group */}
-          <div style={{ display: 'flex', flexDirection: mobile ? 'column' : 'row', alignItems: mobile ? 'flex-end' : 'center', gap: mobile ? 6 : 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {mobile && (
               <button
                 onClick={() => { setMode('pipeline'); setPipelineTab('liverun'); }}
@@ -2207,66 +2539,116 @@ function App() {
                 {isRunning ? '\u25cf LIVE RUN' : 'Live Run'}
               </button>
             )}
-            <a href="style-overview.html"
-              style={{
-                display: 'inline-flex', alignItems: 'center', gap: 5,
-                padding: '5px 11px', background: T.surfaceAlt,
-                border: `1px solid ${T.border}`, borderRadius: 8,
-                textDecoration: 'none', fontFamily: T.sans, fontSize: 11,
-                fontWeight: 700, color: T.muted, letterSpacing: 0.2,
-              }}>
-              🎨 Stil-Katalog
-            </a>
-            <Pill state={curEtappe?.status || data.status} label={curEtappe?.status || data.status} />
-            {!mobile && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>
-              T{curEtappe?.n ?? data.etappe} · {curEtappe?.datum || data.date}
-            </span>}
+            {mode === 'archiv' && (
+              <div style={{ display: 'flex', gap: 4 }}>
+                <button onClick={() => setSelectedIdx(curIdx - 1)} disabled={!canGoLeft}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 28, height: 28, borderRadius: 8,
+                    background: canGoLeft ? T.accentSoft : T.surfaceAlt,
+                    border: `1px solid ${T.border}`,
+                    color: canGoLeft ? T.accentInk : T.mutedSoft,
+                    cursor: canGoLeft ? 'pointer' : 'default',
+                    fontSize: 17, fontWeight: 600, lineHeight: 1, padding: 0 }}>{'\u2039'}</button>
+                <button onClick={() => setSelectedIdx(curIdx + 1)} disabled={!canGoRight}
+                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    width: 28, height: 28, borderRadius: 8,
+                    background: canGoRight ? T.accentSoft : T.surfaceAlt,
+                    border: `1px solid ${T.border}`,
+                    color: canGoRight ? T.accentInk : T.mutedSoft,
+                    cursor: canGoRight ? 'pointer' : 'default',
+                    fontSize: 17, fontWeight: 600, lineHeight: 1, padding: 0 }}>{'\u203a'}</button>
+              </div>
+            )}
           </div>
         </div>
 
-        {/* Title row — only in Archiv mode */}
+        {/* Title row */}
         {mode === 'archiv' && (
         <div style={{ marginTop: mobile ? 12 : 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-            {curEtappe.kuerzel ? null : <div style={{ width: 24, height: 1, background: T.accent }} />}
             {curEtappe.kuerzel && (
-              <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accentInk, background: T.accentSoft, borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap', border: `1px solid ${T.border}` }}>
-                {curEtappe.kuerzel}
-              </span>
+              <div style={{ position: 'relative' }}>
+                <button onClick={() => setRouteDropdownOpen(o => !o)}
+                  style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accentInk,
+                    background: T.accentSoft, borderRadius: 5, padding: '2px 8px',
+                    whiteSpace: 'nowrap', border: `1px solid ${T.border}`,
+                    cursor: routes.length > 1 ? 'pointer' : 'default',
+                    display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  {curEtappe.kuerzel}
+                  {routes.length > 1 && <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>}
+                </button>
+                {routeDropdownOpen && routes.length > 1 && (
+                  <>
+                    <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setRouteDropdownOpen(false)} />
+                    <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100,
+                      background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+                      boxShadow: '0 8px 24px rgba(20,16,28,0.12)', minWidth: 220, overflow: 'hidden' }}>
+                      {routes.map(r => (
+                        <button key={r.route}
+                          onClick={() => { setSelectedIdx(r.firstIdx); setRouteDropdownOpen(false); }}
+                          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                            padding: '10px 14px', border: 'none', cursor: 'pointer', textAlign: 'left',
+                            background: r.route === curEtappe.route ? T.accentSoft : 'transparent',
+                            borderBottom: `1px solid ${T.border}` }}>
+                          <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700,
+                            color: T.accentInk, background: T.accentSoft, borderRadius: 4,
+                            padding: '1px 6px', border: `1px solid ${T.border}`, whiteSpace: 'nowrap' }}>
+                            {r.kuerzel}
+                          </span>
+                          <span style={{ fontFamily: T.sans, fontSize: 12, color: T.ink, fontWeight: r.route === curEtappe.route ? 600 : 400 }}>
+                            {r.routeName}
+                          </span>
+                          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted, marginLeft: 'auto' }}>
+                            {r.count} Etappen
+                          </span>
+                        </button>
+                      ))}
+                    </div>
+                  </>
+                )}
+              </div>
             )}
             <span style={{ fontFamily: T.mono, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 500, color: T.accent }}>
               Tag {curEtappe.n} · {curEtappe.datum || data.date}
             </span>
-            <div style={{ display: 'flex', gap: 4, marginLeft: 4 }}>
-              <button onClick={() => setSelectedIdx(curIdx - 1)} disabled={!canGoLeft}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  width: 22, height: 22, borderRadius: 6,
-                  background: canGoLeft ? T.accentSoft : T.surfaceAlt,
-                  border: `1px solid ${canGoLeft ? T.border : T.border}`,
-                  color: canGoLeft ? T.accentInk : T.mutedSoft,
-                  cursor: canGoLeft ? 'pointer' : 'default',
-                  fontSize: 13, fontWeight: 600, lineHeight: 1, padding: 0 }}>‹</button>
-              <button onClick={() => setSelectedIdx(curIdx + 1)} disabled={!canGoRight}
-                style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
-                  width: 22, height: 22, borderRadius: 6,
-                  background: canGoRight ? T.accentSoft : T.surfaceAlt,
-                  border: `1px solid ${T.border}`,
-                  color: canGoRight ? T.accentInk : T.mutedSoft,
-                  cursor: canGoRight ? 'pointer' : 'default',
-                  fontSize: 13, fontWeight: 600, lineHeight: 1, padding: 0 }}>›</button>
-            </div>
           </div>
-          <div style={{ display: 'flex', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <h1 style={{ fontFamily: T.serif, fontSize: mobile ? 22 : 34, fontWeight: 400, margin: 0, letterSpacing: -0.5, lineHeight: 1.1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: mobile ? 'normal' : 'nowrap' }}>
               {curEtappe.name.split('→')[0].trim()} <span style={{ color: T.accent, fontStyle: 'italic' }}>→</span> {curEtappe.name.split('→')[1]?.trim()}
             </h1>
-            {!mobile && <ScopeSwitcher scope={scope} onChange={setScope} />}
+            <Pill state={curEtappe?.status || data.status} label={curEtappe?.status || data.status} />
           </div>
         </div>
         )}
 
-        {/* Tabs */}
-        <div className="tab-scroll" style={{ marginTop: mode === 'archiv' ? (mobile ? 12 : 18) : (mobile ? 8 : 12) }}>
+        {/* Pipeline title row */}
+        {mode === 'pipeline' && (() => {
+          const pe = isRunning ? (data.etappenList.find(e => e.id === runEtappeId) || null) : null;
+          return (
+          <div style={{ marginTop: mobile ? 12 : 20 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              {pe?.kuerzel && <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accentInk, background: T.accentSoft, borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap', border: `1px solid ${T.border}` }}>{pe.kuerzel}</span>}
+              <span style={{ fontFamily: T.mono, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 500, color: T.accent }}>
+                {pe ? `Tag ${pe.n} \u00b7 ${pe.datum}` : `Pipeline \u00b7 ${new Date().toISOString().slice(0, 10)}`}
+              </span>
+              {isRunning && <Pill state="running" label="l\u00e4uft" />}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <h1 style={{ fontFamily: T.serif, fontSize: mobile ? 22 : 34, fontWeight: 400, margin: 0, letterSpacing: -0.5, lineHeight: 1.1, color: pe?.name ? T.ink : T.mutedSoft }}>
+                {pe?.name
+                  ? <>{pe.name.split('\u2192')[0].trim()} <span style={{ color: T.accent, fontStyle: 'italic' }}>\u2192</span> {pe.name.split('\u2192')[1]?.trim()}</>
+                  : <span style={{ fontStyle: 'italic' }}>Startort \u2192 Zielort</span>
+                }
+              </h1>
+              {pe && <Pill state={pe.status} label={pe.status} />}
+            </div>
+          </div>
+          );
+        })()}
+
+        {/* Tabs \u2014 hidden in Stil-Katalog mode */}
+        {mode !== 'stil-katalog' && (
+        <div className="tab-scroll" style={{ marginTop: mobile ? 12 : 18 }}>
           {tabs.map(t => (
             <div key={t.id} onClick={() => t.id !== 'liverun' ? setActiveTab(t.id) : setActiveTab('liverun')}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: mobile ? '8px 12px' : '9px 14px', borderRadius: 8, cursor: 'pointer', flexShrink: 0,
@@ -2279,22 +2661,20 @@ function App() {
               {t.id === 'liverun' && isRunning ? '\u25cf Live Run' : t.label}
             </div>
           ))}
-          {/* Archiv-Modus: ScopeSwitcher rechts */}
-          {mode === 'archiv' && !mobile && (
-            <div style={{ marginLeft: 'auto' }}>
-              <ScopeSwitcher scope={scope} onChange={setScope} />
-            </div>
-          )}
         </div>
+        )}
       </div>
 
-      {/* Scrollable content */}
-      <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
-        {activeTab === 'liverun'
-          ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} latestEtappe={data?.etappenList?.[data.etappenList.length - 1]} />
-          : activeContent?.Content ? <activeContent.Content data={data} selectedEtappe={curEtappe} /> : null
-        }
-      </div>
+      {/* Content */}
+      {mode === 'stil-katalog'
+        ? <TabStilKatalog />
+        : <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
+            {activeTab === 'liverun'
+              ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} latestEtappe={data?.etappenList?.[data.etappenList.length - 1]} />
+              : activeContent?.Content ? <activeContent.Content data={data} selectedEtappe={curEtappe} /> : null
+            }
+          </div>
+      }
     </div>
   );
 }
