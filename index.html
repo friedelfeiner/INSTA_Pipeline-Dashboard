@@ -2481,6 +2481,27 @@ function App() {
   const setActiveTab = mode === 'archiv' ? setTab : setPipelineTab;
   const activeContent = tabs.find(t => t.id === activeTab);
 
+  const navArrows = (
+    <div style={{ display: 'flex', gap: 4 }}>
+      <button onClick={() => setSelectedIdx(curIdx - 1)} disabled={!canGoLeft}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 30, height: 30, borderRadius: 8,
+          background: canGoLeft ? T.accentSoft : T.surfaceAlt,
+          border: `1px solid ${T.border}`,
+          color: canGoLeft ? T.accentInk : T.mutedSoft,
+          cursor: canGoLeft ? 'pointer' : 'default',
+          fontSize: 18, fontWeight: 600, lineHeight: 1, padding: 0 }}>{'‹'}</button>
+      <button onClick={() => setSelectedIdx(curIdx + 1)} disabled={!canGoRight}
+        style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
+          width: 30, height: 30, borderRadius: 8,
+          background: canGoRight ? T.accentSoft : T.surfaceAlt,
+          border: `1px solid ${T.border}`,
+          color: canGoRight ? T.accentInk : T.mutedSoft,
+          cursor: canGoRight ? 'pointer' : 'default',
+          fontSize: 18, fontWeight: 600, lineHeight: 1, padding: 0 }}>{'›'}</button>
+    </div>
+  );
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: T.bg, color: T.ink, fontFamily: T.sans }}>
       {/* Header */}
@@ -2488,16 +2509,21 @@ function App() {
         {/* Top row */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           {/* Logo block */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: mobile ? 9 : 12, minWidth: 0 }}>
+            <div style={{ width: 30, height: 30, flexShrink: 0, borderRadius: 9, background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <ISparkles size={15} sw={2} />
             </div>
-            <div>
-              <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: -0.2 }}>INSTA Pipeline <span style={{ fontWeight: 400, color: T.muted }}>| Floppy Trail</span></div>
-              <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>Operations</div>
-            </div>
+            {mobile ? (
+              <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: -0.2, whiteSpace: 'nowrap' }}>Floppy Trail</div>
+            ) : (
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: -0.2 }}>INSTA Pipeline <span style={{ fontWeight: 400, color: T.muted }}>| Floppy Trail</span></div>
+                <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>Operations</div>
+              </div>
+            )}
           </div>
-          {/* Mode-Switcher */}
+          {/* Mode-Switcher — desktop only */}
+          {!mobile && (
           <div style={{ display: 'flex', background: T.surfaceAlt, border: `1px solid ${T.border}`, borderRadius: 8, padding: 2, gap: 1 }}>
             {[['archiv', 'Etappen'], ['pipeline', 'Pipeline']].map(([m, label]) => (
               <button key={m} onClick={() => setMode(m)}
@@ -2516,6 +2542,7 @@ function App() {
               Style-Katalog
             </button>
           </div>
+          )}
           {/* Right button group */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             {mobile && (
@@ -2539,28 +2566,24 @@ function App() {
                 {isRunning ? '\u25cf LIVE RUN' : 'Live Run'}
               </button>
             )}
-            {mode === 'archiv' && (
-              <div style={{ display: 'flex', gap: 4 }}>
-                <button onClick={() => setSelectedIdx(curIdx - 1)} disabled={!canGoLeft}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 28, height: 28, borderRadius: 8,
-                    background: canGoLeft ? T.accentSoft : T.surfaceAlt,
-                    border: `1px solid ${T.border}`,
-                    color: canGoLeft ? T.accentInk : T.mutedSoft,
-                    cursor: canGoLeft ? 'pointer' : 'default',
-                    fontSize: 17, fontWeight: 600, lineHeight: 1, padding: 0 }}>{'\u2039'}</button>
-                <button onClick={() => setSelectedIdx(curIdx + 1)} disabled={!canGoRight}
-                  style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
-                    width: 28, height: 28, borderRadius: 8,
-                    background: canGoRight ? T.accentSoft : T.surfaceAlt,
-                    border: `1px solid ${T.border}`,
-                    color: canGoRight ? T.accentInk : T.mutedSoft,
-                    cursor: canGoRight ? 'pointer' : 'default',
-                    fontSize: 17, fontWeight: 600, lineHeight: 1, padding: 0 }}>{'\u203a'}</button>
-              </div>
-            )}
+            {!mobile && mode === 'archiv' && navArrows}
           </div>
         </div>
+
+        {/* Mobile mode switcher — full width */}
+        {mobile && (
+          <div style={{ display: 'flex', background: T.surfaceAlt, border: `1px solid ${T.border}`, borderRadius: 8, padding: 2, gap: 1, marginTop: 10 }}>
+            {[['archiv', 'Etappen'], ['pipeline', 'Pipeline'], ['stil-katalog', 'Style']].map(([m, label]) => (
+              <button key={m} onClick={() => setMode(m)}
+                style={{ flex: 1, fontFamily: T.sans, fontSize: 13, fontWeight: mode === m ? 600 : 500, padding: '8px 0', borderRadius: 6, border: 'none', cursor: 'pointer', transition: 'all 0.1s',
+                  background: mode === m ? T.surface : 'transparent',
+                  color: mode === m ? T.ink : T.muted,
+                  boxShadow: mode === m ? '0 1px 2px rgba(20,16,28,0.06)' : 'none' }}>
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
 
         {/* Title row */}
         {mode === 'archiv' && (
@@ -2611,6 +2634,7 @@ function App() {
             <span style={{ fontFamily: T.mono, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 500, color: T.accent }}>
               Tag {curEtappe.n} · {curEtappe.datum || data.date}
             </span>
+            {mobile && <div style={{ marginLeft: 'auto' }}>{navArrows}</div>}
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
             <h1 style={{ fontFamily: T.serif, fontSize: mobile ? 22 : 34, fontWeight: 400, margin: 0, letterSpacing: -0.5, lineHeight: 1.1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: mobile ? 'normal' : 'nowrap' }}>
