@@ -1814,7 +1814,7 @@ function MonologPanel() {
 
 // ─── HITL #1 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl1() {
-  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,narrator_grundgeruest,foto_cluster,featured_foto_nrs,hitl_prio_stil,hitl1_benachrichtigt_um,hitl1_entschieden_um,hitl_kommentar,hitl_zusatz_foto_nrs';
+  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,reel_stil,narrator_grundgeruest,foto_cluster,featured_foto_nrs,hitl_prio_stil,hitl1_benachrichtigt_um,hitl1_entschieden_um,hitl_kommentar,hitl_zusatz_foto_nrs';
   const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&pipeline_status=eq.narrator_fertig&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
@@ -1833,7 +1833,8 @@ function Hitl1Panel({ etappe, fotos, onFreigegeben }) {
   const cluster = etappe.foto_cluster || {};
   const gags = cluster.zusatz_momente || [];
   const stile = ['ki_narrator', 'impact', 'rap', 'selfie_first'];
-  const [prio, setPrio] = React.useState(etappe.hitl_prio_stil || 'ki_narrator');
+  // Default = der für diesen Tag rotierte Stil (etappe.reel_stil), im HITL änderbar.
+  const [prio, setPrio] = React.useState(etappe.hitl_prio_stil || etappe.reel_stil || 'ki_narrator');
   const [gagSel, setGagSel] = React.useState([]);
   const [kommentar, setKommentar] = React.useState('');
   const [saving, setSaving] = React.useState(false);
@@ -2012,6 +2013,12 @@ function Hitl2Veto({ etappe, onVeto }) {
       {prioVariante && (
         <div style={{ fontSize: 13, fontFamily: T.mono, color: T.muted, marginBottom: 12 }}>
           Stil: <b style={{ color: T.ink }}>{prioVariante.stil}</b>
+          {prioVariante.reel_datei && (
+            <div style={{ marginTop: 8, padding: '8px 10px', background: T.accentSoft, borderRadius: 6, fontSize: 12, fontFamily: T.sans, color: T.accentInk }}>
+              👀 Zum Anschauen: <b>Dropbox → 40_Finale_Reels</b><br/>
+              <span style={{ fontFamily: T.mono, fontSize: 11 }}>{prioVariante.reel_datei.split('/').pop()}</span>
+            </div>
+          )}
           {prioVariante.instagram_caption && (
             <div style={{ marginTop: 6, fontFamily: T.sans, fontSize: 12, color: T.muted, fontStyle: 'italic', maxHeight: 60, overflow: 'hidden' }}>
               {prioVariante.instagram_caption.slice(0, 160)}…
