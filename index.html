@@ -75,6 +75,7 @@ function platformCosts(e) {
 // ─── Supabase config ──────────────────────────────────────────────────────────
 const SUPABASE_URL = 'https://rgwbmqlcxxrynufcmwqx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_F-ZIctvp3JyhpVGNXbMttw_9vc7tdtH';
+const FUNCTIONS_URL = SUPABASE_URL + '/functions/v1';
 
 // ─── Data loading ─────────────────────────────────────────────────────────────
 async function fetchEtappen() {
@@ -117,6 +118,24 @@ async function fetchRouten() {
     r.id,
     { name: r.name || '', kuerzel: r.kuerzel || r.name?.split(' ').map(w => w[0]).join('').toUpperCase() || '?' }
   ]));
+}
+
+async function sendMonolog(datum, text) {
+  const r = await fetch(FUNCTIONS_URL + '/monolog-grundgeruest', {
+    method: 'POST',
+    headers: { 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' },
+    body: JSON.stringify({ datum, monolog_text: text }),
+  });
+  return r.json();
+}
+
+async function patchEtappe(id, fields) {
+  return fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${id}`, {
+    method: 'PATCH',
+    headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY,
+      'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    body: JSON.stringify(fields),
+  });
 }
 
 function fmtDur(s) {
@@ -1755,10 +1774,49 @@ function ScopeSwitcher({ scope, onChange }) {
   );
 }
 
+// ─── Monolog Panel ────────────────────────────────────────────────────────────
+function MonologPanel() {
+  const [datum, setDatum] = React.useState(new Date().toISOString().slice(0,10));
+  const [text, setText] = React.useState('');
+  const [status, setStatus] = React.useState(null);
+  return (
+    <div style={{ maxWidth: 640, padding: 24, background: T.surface, borderRadius: 12, border: `1px solid ${T.border}` }}>
+      <h2 style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, margin: '0 0 16px', color: T.ink }}>Tages-Monolog</h2>
+      <div style={{ marginBottom: 12 }}>
+        <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Datum</label>
+        <input type="date" value={datum} onChange={e => setDatum(e.target.value)}
+          style={{ fontFamily: T.sans, fontSize: 14, padding: '8px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, width: '100%' }} />
+      </div>
+      <div style={{ marginBottom: 16 }}>
+        <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Monolog</label>
+        <textarea rows={8} value={text} placeholder="Diktier deinen Monolog…"
+          onChange={e => setText(e.target.value)}
+          style={{ width: '100%', fontFamily: T.sans, fontSize: 14, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, resize: 'vertical' }} />
+      </div>
+      <button onClick={async () => {
+        if (!text.trim()) return;
+        setStatus('…');
+        const res = await sendMonolog(datum, text);
+        setStatus(res.grundgeruest ? '✓ ' + (res.grundgeruest.thema || 'ok') : 'Fehler: ' + (res.error || 'unbekannt'));
+      }}
+        disabled={!text.trim()}
+        style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: text.trim() ? 'pointer' : 'not-allowed', background: text.trim() ? T.accent : T.surfaceAlt, color: text.trim() ? '#fff' : T.mutedSoft }}>
+        Speichern &amp; Grundgerüst erzeugen
+      </button>
+      {status && (
+        <p style={{ marginTop: 12, fontSize: 13, color: status.startsWith('✓') ? T.ok : T.err, fontFamily: T.mono }}>
+          {status}
+        </p>
+      )}
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 const TABS = [
   { id: 'uebersicht',  label: 'Übersicht',   Icon: IDash,      Content: TabUebersicht },
   { id: 'kosten',      label: 'Kosten',      Icon: ICoins,     Content: TabKosten },
+  { id: 'monolog',     label: 'Monolog',     Icon: ISend,      Content: () => <MonologPanel /> },
   { id: 'stylereview', label: 'Style Review',Icon: ISparkles,  Content: TabStyleReview },
   { id: 'performance', label: 'Performance', Icon: IGauge,     Content: TabPerformance },
   { id: 'reliability', label: 'Reliability', Icon: IShield,    Content: TabReliability },
