@@ -2070,21 +2070,27 @@ function TabHitl2() {
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
-const TABS = [
+const ARCHIV_TABS = [
   { id: 'uebersicht',  label: 'Übersicht',   Icon: IDash,      Content: TabUebersicht },
   { id: 'kosten',      label: 'Kosten',      Icon: ICoins,     Content: TabKosten },
-  { id: 'monolog',     label: 'Monolog',     Icon: ISend,      Content: () => <MonologPanel /> },
-  { id: 'hitl1',       label: 'HITL #1',     Icon: ISparkles,  Content: TabHitl1 },
-  { id: 'hitl2',       label: 'Veto',        Icon: IAlert,     Content: TabHitl2 },
   { id: 'stylereview', label: 'Style Review',Icon: ISparkles,  Content: TabStyleReview },
   { id: 'performance', label: 'Performance', Icon: IGauge,     Content: TabPerformance },
   { id: 'reliability', label: 'Reliability', Icon: IShield,    Content: TabReliability },
+];
+
+const PIPELINE_TABS = [
+  { id: 'monolog', label: 'Monolog',  Icon: ISend,      Content: () => <MonologPanel /> },
+  { id: 'hitl1',   label: 'HITL #1', Icon: ISparkles,  Content: TabHitl1 },
+  { id: 'hitl2',   label: 'Veto',    Icon: IAlert,     Content: TabHitl2 },
+  { id: 'liverun', label: 'Live Run',Icon: IActivity,  Content: null },
 ];
 
 function App() {
   const mobile = useMobile();
   const [tab, setTab]         = useState('uebersicht');
   const [scope, setScope]     = useState('Heute');
+  const [mode, setMode] = useState('archiv');      // 'archiv' | 'pipeline'
+  const [pipelineTab, setPipelineTab] = useState('monolog');
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
@@ -2130,7 +2136,6 @@ function App() {
     </div>
   );
 
-  const active = TABS.find(t => t.id === tab);
   const lastIdx = data.etappenList.length - 1;
   const latestRunIdx = data.etappenList.findIndex(e => e.id === data.latestId);
   const defaultIdx = latestRunIdx >= 0 ? latestRunIdx : lastIdx;
@@ -2139,12 +2144,18 @@ function App() {
   const canGoLeft = curIdx > 0;
   const canGoRight = curIdx < lastIdx;
 
+  const tabs       = mode === 'archiv' ? ARCHIV_TABS : PIPELINE_TABS;
+  const activeTab  = mode === 'archiv' ? tab : pipelineTab;
+  const setActiveTab = mode === 'archiv' ? setTab : setPipelineTab;
+  const activeContent = tabs.find(t => t.id === activeTab);
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100vh', background: T.bg, color: T.ink, fontFamily: T.sans }}>
       {/* Header */}
       <div style={{ background: T.surface, borderBottom: `1px solid ${T.border}`, padding: mobile ? '12px 16px' : '14px 28px', flexShrink: 0 }}>
         {/* Top row */}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          {/* Logo block */}
           <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
             <div style={{ width: 30, height: 30, borderRadius: 9, background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
               <ISparkles size={15} sw={2} />
@@ -2154,20 +2165,33 @@ function App() {
               <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>Operations</div>
             </div>
           </div>
+          {/* Mode-Switcher */}
+          <div style={{ display: 'flex', background: T.surfaceAlt, border: `1px solid ${T.border}`, borderRadius: 8, padding: 2, gap: 1 }}>
+            {[['archiv', 'Archiv'], ['pipeline', 'Pipeline']].map(([m, label]) => (
+              <button key={m} onClick={() => setMode(m)}
+                style={{ fontFamily: T.sans, fontSize: 12, fontWeight: mode === m ? 600 : 500, padding: '5px 12px', borderRadius: 6, border: 'none', cursor: 'pointer', transition: 'all 0.1s',
+                  background: mode === m ? T.surface : 'transparent',
+                  color: mode === m ? T.ink : T.muted,
+                  boxShadow: mode === m ? '0 1px 2px rgba(20,16,28,0.06)' : 'none' }}>
+                {label}
+              </button>
+            ))}
+          </div>
+          {/* Right button group */}
           <div style={{ display: 'flex', flexDirection: mobile ? 'column' : 'row', alignItems: mobile ? 'flex-end' : 'center', gap: mobile ? 6 : 10 }}>
             {mobile && (
               <button
-                onClick={() => setTab('liverun')}
+                onClick={() => { setMode('pipeline'); setPipelineTab('liverun'); }}
                 style={{
                   display: 'inline-flex', alignItems: 'center', gap: 5,
                   padding: '5px 11px',
                   background: isRunning
                     ? `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`
-                    : tab === 'liverun' ? T.accentSoft : T.surfaceAlt,
-                  border: `1px solid ${isRunning ? T.accentDeep : tab === 'liverun' ? T.accent : T.border}`,
+                    : activeTab === 'liverun' ? T.accentSoft : T.surfaceAlt,
+                  border: `1px solid ${isRunning ? T.accentDeep : activeTab === 'liverun' ? T.accent : T.border}`,
                   borderRadius: 8, cursor: 'pointer',
                   fontFamily: T.sans, fontSize: 11, fontWeight: 700,
-                  color: isRunning ? '#fff' : tab === 'liverun' ? T.accentInk : T.muted,
+                  color: isRunning ? '#fff' : activeTab === 'liverun' ? T.accentInk : T.muted,
                   letterSpacing: 0.2,
                   boxShadow: isRunning ? `0 2px 8px ${T.accent}55` : 'none',
                 }}
@@ -2193,7 +2217,8 @@ function App() {
           </div>
         </div>
 
-        {/* Title row */}
+        {/* Title row — only in Archiv mode */}
+        {mode === 'archiv' && (
         <div style={{ marginTop: mobile ? 12 : 20 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
             {curEtappe.kuerzel ? null : <div style={{ width: 24, height: 1, background: T.accent }} />}
@@ -2231,36 +2256,26 @@ function App() {
             {!mobile && <ScopeSwitcher scope={scope} onChange={setScope} />}
           </div>
         </div>
+        )}
 
         {/* Tabs */}
-        <div className="tab-scroll" style={{ marginTop: mobile ? 12 : 18 }}>
-          {TABS.map(t => (
-            <div key={t.id} onClick={() => setTab(t.id)}
+        <div className="tab-scroll" style={{ marginTop: mode === 'archiv' ? (mobile ? 12 : 18) : (mobile ? 8 : 12) }}>
+          {tabs.map(t => (
+            <div key={t.id} onClick={() => t.id !== 'liverun' ? setActiveTab(t.id) : setActiveTab('liverun')}
               style={{ display: 'flex', alignItems: 'center', gap: 6, padding: mobile ? '8px 12px' : '9px 14px', borderRadius: 8, cursor: 'pointer', flexShrink: 0,
-                background: tab === t.id ? T.accentSoft : 'transparent',
-                color: tab === t.id ? T.accentInk : T.muted,
-                fontFamily: T.sans, fontSize: mobile ? 12 : 13, fontWeight: tab === t.id ? 600 : 500,
+                background: activeTab === t.id ? T.accentSoft : (t.id === 'liverun' && isRunning ? `linear-gradient(135deg, ${T.accent}22, ${T.accentDeep}18)` : 'transparent'),
+                border: t.id === 'liverun' && isRunning ? `1px solid ${T.accent}55` : '1px solid transparent',
+                color: activeTab === t.id ? T.accentInk : (t.id === 'liverun' && isRunning ? T.accentInk : T.muted),
+                fontFamily: T.sans, fontSize: mobile ? 12 : 13, fontWeight: activeTab === t.id ? 600 : 500,
                 transition: 'background 0.12s, color 0.12s' }}>
-              <t.Icon size={14} sw={tab === t.id ? 2 : 1.7} />
-              {t.label}
+              <t.Icon size={14} sw={activeTab === t.id || (t.id === 'liverun' && isRunning) ? 2 : 1.7} />
+              {t.id === 'liverun' && isRunning ? '\u25cf Live Run' : t.label}
             </div>
           ))}
-          {!mobile && (
-            <div onClick={() => setTab('liverun')}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 6,
-                padding: '9px 14px', borderRadius: 8, cursor: 'pointer', flexShrink: 0,
-                marginLeft: 'auto',
-                background: isRunning
-                  ? `linear-gradient(135deg, ${T.accent}22, ${T.accentDeep}18)`
-                  : tab === 'liverun' ? T.accentSoft : 'transparent',
-                border: isRunning ? `1px solid ${T.accent}55` : tab === 'liverun' ? `1px solid ${T.border}` : '1px solid transparent',
-                color: isRunning ? T.accentInk : tab === 'liverun' ? T.accentInk : T.muted,
-                fontFamily: T.sans, fontSize: 13, fontWeight: tab === 'liverun' ? 600 : 500,
-                transition: 'background 0.12s, color 0.12s',
-              }}>
-              <IActivity size={14} sw={tab === 'liverun' || isRunning ? 2 : 1.7} />
-              {isRunning ? '\u25cf Live Run' : 'Live Run'}
+          {/* Archiv-Modus: ScopeSwitcher rechts */}
+          {mode === 'archiv' && !mobile && (
+            <div style={{ marginLeft: 'auto' }}>
+              <ScopeSwitcher scope={scope} onChange={setScope} />
             </div>
           )}
         </div>
@@ -2268,9 +2283,9 @@ function App() {
 
       {/* Scrollable content */}
       <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
-        {tab === 'liverun'
+        {activeTab === 'liverun'
           ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} latestEtappe={data?.etappenList?.[data.etappenList.length - 1]} />
-          : active?.Content ? <active.Content data={data} selectedEtappe={curEtappe} /> : null
+          : activeContent?.Content ? <activeContent.Content data={data} selectedEtappe={curEtappe} /> : null
         }
       </div>
     </div>
