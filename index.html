@@ -161,6 +161,14 @@ async function fetchMonolog(datum) {
   return rows[0]?.tages_monolog || '';
 }
 
+// Liste aller bereits eingesprochenen Monologe (neueste zuerst), inkl. Route via Embed.
+async function fetchMonologListe() {
+  const url = `${SUPABASE_URL}/rest/v1/etappen?select=id,datum,etappen_nr,tag_nr,tagesueberschrift,tages_monolog,route:routen(name,kuerzel)&tages_monolog=not.is.null&order=datum.desc&limit=30`;
+  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY } });
+  if (!res.ok) return [];
+  return res.json();
+}
+
 async function patchEtappe(id, fields) {
   return fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${id}`, {
     method: 'PATCH',
@@ -2079,12 +2087,60 @@ function TabStilKatalog() {
 
 
 // ─── Monolog Panel ────────────────────────────────────────────────────────────
+function fmtDatumDE(iso) {
+  if (!iso) return '';
+  const [y, m, d] = iso.split('-');
+  return `${d}.${m}.${y}`;
+}
+
+function MonologListeItem({ e, aktiv, hideKuerzel, onPick }) {
+  const route = e.route || {};
+  const kuerzel = route.kuerzel || '—';
+  const routeName = route.name || '';
+  const heading = e.tagesueberschrift || `Etappe ${e.tag_nr || e.etappen_nr || '?'}`;
+  const tagLabel = e.tag_nr ? `Tag ${e.tag_nr}` : (e.etappen_nr ? `Etappe ${e.etappen_nr}` : '');
+
+  return (
+    <button onClick={() => onPick(e)} type="button"
+      style={{
+        textAlign: 'left', width: '100%', cursor: 'pointer', display: 'block',
+        background: aktiv ? T.accentSoft : T.surface,
+        border: `1px solid ${aktiv ? T.accent : T.border}`,
+        borderRadius: 8, padding: '10px 12px', marginBottom: 8,
+        fontFamily: T.sans, color: T.ink,
+      }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 4, flexWrap: 'wrap' }}>
+        {!hideKuerzel && (
+          <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, color: T.accentInk, background: T.accentSoft, padding: '2px 6px', borderRadius: 4, letterSpacing: 0.3 }}>{kuerzel}</span>
+        )}
+        {tagLabel && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{tagLabel}</span>}
+        {tagLabel && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>·</span>}
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{fmtDatumDE(e.datum)}</span>
+        {aktiv && <span style={{ marginLeft: 'auto', fontSize: 10, fontWeight: 600, color: T.accent, fontFamily: T.mono }}>im Editor</span>}
+      </div>
+      <div style={{ fontFamily: T.serif, fontSize: 15, color: T.ink, lineHeight: 1.2, marginBottom: routeName ? 3 : 0 }}>
+        {heading}
+      </div>
+      {routeName && !hideKuerzel && (
+        <div style={{ fontFamily: T.sans, fontSize: 11, color: T.mutedSoft }}>
+          {routeName}
+        </div>
+      )}
+    </button>
+  );
+}
+
 function MonologPanel() {
+  const mobile = useMobile();
   const [datum, setDatum] = React.useState(new Date().toISOString().slice(0,10));
   const [text, setText] = React.useState('');
   const [status, setStatus] = React.useState(null);
   const [laden, setLaden] = React.useState(false);
   const [saving, setSaving] = React.useState(false);
+  const [liste, setListe] = React.useState([]);
+  const [listeLaden, setListeLaden] = React.useState(true);
+  const [listeError, setListeError] = React.useState(null);
+  const [activeRoute, setActiveRoute] = React.useState(null); // null = alle
 
   // Beim Datum-Wechsel den gespeicherten Monolog laden → korrigieren statt überschreiben.
   React.useEffect(() => {
@@ -2094,6 +2150,16 @@ function MonologPanel() {
     return () => { abbruch = true; };
   }, [datum]);
 
+  // Liste der bereits aufgezeichneten Monologe einmal laden.
+  React.useEffect(() => {
+    let abbruch = false;
+    setListeLaden(true);
+    fetchMonologListe()
+      .then(rows => { if (!abbruch) { setListe(rows); setListeLaden(false); } })
+      .catch(err => { if (!abbruch) { setListeError(err.message); setListeLaden(false); } });
+    return () => { abbruch = true; };
+  }, []);
+
   // Reines Speichern — kein KI-Schritt, sichert was gerade im Feld steht.
   async function speichern() {
     if (!text.trim()) return;
@@ -2101,6 +2167,22 @@ function MonologPanel() {
     const res = await sendMonolog(datum, text, true);
     setSaving(false);
     setStatus(res.ok ? '✓ Gespeichert' : 'Fehler: ' + (res.error || 'unbekannt'));
+    if (res.ok) {
+      // Liste lokal aktualisieren, damit der neue Eintrag sofort erscheint.
+      setListe(prev => {
+        const idx = prev.findIndex(p => p.datum === datum);
+        const eintrag = {
+          id: prev[idx]?.id || `local-${datum}`,
+          datum, etappen_nr: null, tag_nr: null,
+          tagesueberschrift: prev[idx]?.tagesueberschrift || null,
+          tages_monolog: text.trim(),
+          route: prev[idx]?.route || null,
+        };
+        return idx >= 0
+          ? [eintrag, ...prev.filter((_, i) => i !== idx)]
+          : [eintrag, ...prev];
+      });
+    }
   }
 
   // Leichte KI-Säuberung — gibt den geputzten Text zurück ins Feld, du liest gegen.
@@ -2113,40 +2195,88 @@ function MonologPanel() {
     else setStatus('Fehler: ' + (res.error || 'unbekannt'));
   }
 
+  function pick(e) {
+    setDatum(e.datum);
+    setStatus(null);
+    if (mobile && typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Wege aus den geladenen Monologen ableiten — nur die mit Inhalt tauchen als Chip auf.
+  const routen = React.useMemo(() => {
+    const m = new Map();
+    liste.forEach(e => {
+      const k = e.route?.kuerzel;
+      if (k) m.set(k, e.route);
+    });
+    return Array.from(m.values()).sort((a, b) => (a.kuerzel || '').localeCompare(b.kuerzel || ''));
+  }, [liste]);
+
+  const gefiltert = activeRoute
+    ? liste.filter(e => e.route?.kuerzel === activeRoute)
+    : liste;
+
   const aktiv = text.trim() && !saving && !laden;
 
   return (
-    <div style={{ maxWidth: 640, padding: 24, background: T.surface, borderRadius: 12, border: `1px solid ${T.border}` }}>
-      <h2 style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, margin: '0 0 16px', color: T.ink }}>Tages-Monolog</h2>
-      <div style={{ marginBottom: 12 }}>
-        <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Datum</label>
-        <input type="date" value={datum} onChange={e => setDatum(e.target.value)}
-          style={{ fontFamily: T.sans, fontSize: 14, padding: '8px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, width: '100%' }} />
-      </div>
-      <div style={{ marginBottom: 16 }}>
-        <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Monolog{laden ? ' — lade…' : ''}</label>
-        <textarea rows={10} value={text} placeholder="Diktier deinen Monolog…" disabled={laden}
-          onChange={e => setText(e.target.value)}
-          style={{ width: '100%', fontFamily: T.sans, fontSize: 14, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, resize: 'vertical', opacity: laden ? 0.5 : 1 }} />
-      </div>
-      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
-        <button onClick={saeubern} disabled={!aktiv}
-          style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: `1px solid ${aktiv ? T.accent : T.border}`, cursor: aktiv ? 'pointer' : 'not-allowed', background: 'transparent', color: aktiv ? T.accent : T.mutedSoft }}>
-          ✨ Säubern
-        </button>
-        <button onClick={speichern} disabled={!aktiv}
-          style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: aktiv ? 'pointer' : 'not-allowed', background: aktiv ? T.accent : T.surfaceAlt, color: aktiv ? '#fff' : T.mutedSoft }}>
-          {saving ? '…' : 'Speichern'}
-        </button>
-      </div>
-      <p style={{ marginTop: 10, fontSize: 12, color: T.muted, fontFamily: T.sans }}>
-        Diktieren → <b>Säubern</b> (glättet leicht, lässt deinen Stil) → gegenlesen → <b>Speichern</b>.
-      </p>
-      {status && (
-        <p style={{ marginTop: 12, fontSize: 13, color: status.startsWith('✓') ? T.ok : T.err, fontFamily: T.mono }}>
-          {status}
+    <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'minmax(0, 1fr) 320px', gap: 20, alignItems: 'start' }}>
+      <div style={{ maxWidth: mobile ? '100%' : 640, padding: 24, background: T.surface, borderRadius: 12, border: `1px solid ${T.border}` }}>
+        <h2 style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, margin: '0 0 16px', color: T.ink }}>Tages-Monolog</h2>
+        <div style={{ marginBottom: 12 }}>
+          <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Datum</label>
+          <input type="date" value={datum} onChange={e => setDatum(e.target.value)}
+            style={{ fontFamily: T.sans, fontSize: 14, padding: '8px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, width: '100%' }} />
+        </div>
+        <div style={{ marginBottom: 16 }}>
+          <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Monolog{laden ? ' — lade…' : ''}</label>
+          <textarea rows={10} value={text} placeholder="Diktier deinen Monolog…" disabled={laden}
+            onChange={e => setText(e.target.value)}
+            style={{ width: '100%', fontFamily: T.sans, fontSize: 14, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, resize: 'vertical', opacity: laden ? 0.5 : 1 }} />
+        </div>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+          <button onClick={saeubern} disabled={!aktiv}
+            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: `1px solid ${aktiv ? T.accent : T.border}`, cursor: aktiv ? 'pointer' : 'not-allowed', background: 'transparent', color: aktiv ? T.accent : T.mutedSoft }}>
+            ✨ Säubern
+          </button>
+          <button onClick={speichern} disabled={!aktiv}
+            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: aktiv ? 'pointer' : 'not-allowed', background: aktiv ? T.accent : T.surfaceAlt, color: aktiv ? '#fff' : T.mutedSoft }}>
+            {saving ? '…' : 'Speichern'}
+          </button>
+        </div>
+        <p style={{ marginTop: 10, fontSize: 12, color: T.muted, fontFamily: T.sans }}>
+          Diktieren → <b>Säubern</b> (glättet leicht, lässt deinen Stil) → gegenlesen → <b>Speichern</b>.
         </p>
-      )}
+        {status && (
+          <p style={{ marginTop: 12, fontSize: 13, color: status.startsWith('✓') ? T.ok : T.err, fontFamily: T.mono }}>
+            {status}
+          </p>
+        )}
+      </div>
+
+      <aside style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18, position: mobile ? 'static' : 'sticky', top: 20 }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 14 }}>
+          <span className={`sk-chip ${activeRoute === null ? 'active' : ''}`} onClick={() => setActiveRoute(null)}>Alle</span>
+          {routen.map(r => (
+            <span key={r.kuerzel} className={`sk-chip ${activeRoute === r.kuerzel ? 'active' : ''}`} onClick={() => setActiveRoute(r.kuerzel)}>{r.kuerzel}</span>
+          ))}
+        </div>
+        {listeLaden && <div style={{ fontSize: 13, color: T.muted, fontFamily: T.sans }}>Lade…</div>}
+        {listeError && <div style={{ fontSize: 12, color: T.err, fontFamily: T.sans }}>{listeError}</div>}
+        {!listeLaden && !listeError && liste.length === 0 && (
+          <div style={{ fontSize: 13, color: T.muted, fontFamily: T.sans, lineHeight: 1.4 }}>
+            Noch keine Monologe aufgezeichnet. Diktier oben deinen ersten — er erscheint dann hier.
+          </div>
+        )}
+        {!listeLaden && !listeError && liste.length > 0 && gefiltert.length === 0 && (
+          <div style={{ fontSize: 13, color: T.muted, fontFamily: T.sans, lineHeight: 1.4 }}>
+            Keine Monologe auf {activeRoute}.
+          </div>
+        )}
+        <div style={{ maxHeight: mobile ? 'none' : 'calc(100vh - 180px)', overflowY: 'auto', marginRight: mobile ? 0 : -6, paddingRight: mobile ? 0 : 6 }}>
+          {gefiltert.map(e => (
+            <MonologListeItem key={e.id || e.datum} e={e} aktiv={e.datum === datum} hideKuerzel={activeRoute !== null} onPick={pick} />
+          ))}
+        </div>
+      </aside>
     </div>
   );
 }
