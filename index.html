@@ -143,13 +143,22 @@ async function fetchRouten() {
   ]));
 }
 
-async function sendMonolog(datum, text) {
+async function sendMonolog(datum, text, nurText) {
   const r = await fetch(FUNCTIONS_URL + '/monolog-grundgeruest', {
     method: 'POST',
     headers: { 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ datum, monolog_text: text }),
+    body: JSON.stringify({ datum, monolog_text: text, nur_text: !!nurText }),
   });
   return r.json();
+}
+
+// Vorhandenen Monolog für ein Datum laden (run=1, wie die Edge Function ihn ablegt).
+async function fetchMonolog(datum) {
+  const url = `${SUPABASE_URL}/rest/v1/etappen?datum=eq.${datum}&run=eq.1&select=tages_monolog&limit=1`;
+  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY } });
+  if (!res.ok) return '';
+  const rows = await res.json();
+  return rows[0]?.tages_monolog || '';
 }
 
 async function patchEtappe(id, fields) {
@@ -2074,6 +2083,38 @@ function MonologPanel() {
   const [datum, setDatum] = React.useState(new Date().toISOString().slice(0,10));
   const [text, setText] = React.useState('');
   const [status, setStatus] = React.useState(null);
+  const [laden, setLaden] = React.useState(false);
+  const [saving, setSaving] = React.useState(false);
+
+  // Beim Datum-Wechsel den gespeicherten Monolog laden → korrigieren statt überschreiben.
+  React.useEffect(() => {
+    let abbruch = false;
+    setLaden(true); setStatus(null);
+    fetchMonolog(datum).then(t => { if (!abbruch) { setText(t); setLaden(false); } });
+    return () => { abbruch = true; };
+  }, [datum]);
+
+  // Reines Speichern — kein KI-Schritt, sichert was gerade im Feld steht.
+  async function speichern() {
+    if (!text.trim()) return;
+    setSaving(true); setStatus('…');
+    const res = await sendMonolog(datum, text, true);
+    setSaving(false);
+    setStatus(res.ok ? '✓ Gespeichert' : 'Fehler: ' + (res.error || 'unbekannt'));
+  }
+
+  // Leichte KI-Säuberung — gibt den geputzten Text zurück ins Feld, du liest gegen.
+  async function saeubern() {
+    if (!text.trim()) return;
+    setSaving(true); setStatus('… säubere');
+    const res = await sendMonolog(datum, text, false);
+    setSaving(false);
+    if (res.gesaeubert) { setText(res.gesaeubert); setStatus('✓ Gesäubert — bitte gegenlesen, dann Speichern'); }
+    else setStatus('Fehler: ' + (res.error || 'unbekannt'));
+  }
+
+  const aktiv = text.trim() && !saving && !laden;
+
   return (
     <div style={{ maxWidth: 640, padding: 24, background: T.surface, borderRadius: 12, border: `1px solid ${T.border}` }}>
       <h2 style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, margin: '0 0 16px', color: T.ink }}>Tages-Monolog</h2>
@@ -2083,21 +2124,24 @@ function MonologPanel() {
           style={{ fontFamily: T.sans, fontSize: 14, padding: '8px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, width: '100%' }} />
       </div>
       <div style={{ marginBottom: 16 }}>
-        <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Monolog</label>
-        <textarea rows={8} value={text} placeholder="Diktier deinen Monolog…"
+        <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Monolog{laden ? ' — lade…' : ''}</label>
+        <textarea rows={10} value={text} placeholder="Diktier deinen Monolog…" disabled={laden}
           onChange={e => setText(e.target.value)}
-          style={{ width: '100%', fontFamily: T.sans, fontSize: 14, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, resize: 'vertical' }} />
+          style={{ width: '100%', fontFamily: T.sans, fontSize: 14, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, resize: 'vertical', opacity: laden ? 0.5 : 1 }} />
       </div>
-      <button onClick={async () => {
-        if (!text.trim()) return;
-        setStatus('…');
-        const res = await sendMonolog(datum, text);
-        setStatus(res.grundgeruest ? '✓ ' + (res.grundgeruest.thema || 'ok') : 'Fehler: ' + (res.error || 'unbekannt'));
-      }}
-        disabled={!text.trim()}
-        style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: text.trim() ? 'pointer' : 'not-allowed', background: text.trim() ? T.accent : T.surfaceAlt, color: text.trim() ? '#fff' : T.mutedSoft }}>
-        Speichern &amp; Grundgerüst erzeugen
-      </button>
+      <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <button onClick={saeubern} disabled={!aktiv}
+          style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: `1px solid ${aktiv ? T.accent : T.border}`, cursor: aktiv ? 'pointer' : 'not-allowed', background: 'transparent', color: aktiv ? T.accent : T.mutedSoft }}>
+          ✨ Säubern
+        </button>
+        <button onClick={speichern} disabled={!aktiv}
+          style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: aktiv ? 'pointer' : 'not-allowed', background: aktiv ? T.accent : T.surfaceAlt, color: aktiv ? '#fff' : T.mutedSoft }}>
+          {saving ? '…' : 'Speichern'}
+        </button>
+      </div>
+      <p style={{ marginTop: 10, fontSize: 12, color: T.muted, fontFamily: T.sans }}>
+        Diktieren → <b>Säubern</b> (glättet leicht, lässt deinen Stil) → gegenlesen → <b>Speichern</b>.
+      </p>
       {status && (
         <p style={{ marginTop: 12, fontSize: 13, color: status.startsWith('✓') ? T.ok : T.err, fontFamily: T.mono }}>
           {status}
@@ -2109,7 +2153,7 @@ function MonologPanel() {
 
 // ─── HITL #1 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl1() {
-  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,reel_stil,narrator_grundgeruest,foto_cluster,featured_foto_nrs,hitl_prio_stil,hitl1_benachrichtigt_um,hitl1_entschieden_um,hitl_kommentar,hitl_zusatz_foto_nrs';
+  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,reel_stil,narrator_grundgeruest,tages_monolog,foto_cluster,featured_foto_nrs,hitl_prio_stil,hitl1_benachrichtigt_um,hitl1_entschieden_um,hitl_kommentar,hitl_zusatz_foto_nrs';
   const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&pipeline_status=eq.narrator_fertig&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
@@ -2133,18 +2177,29 @@ function Hitl1Panel({ etappe, fotos, onFreigegeben }) {
   const [gagSel, setGagSel] = React.useState([]);
   const [kommentar, setKommentar] = React.useState('');
   const [saving, setSaving] = React.useState(false);
+  // Grundgerüst direkt editierbar — die finale Narrator-Stufe liest es aus der DB.
+  const [thema, setThema] = React.useState(gg.thema || '');
+  const [ton, setTon] = React.useState(gg.ton || '');
+  const [fragmenteText, setFragmenteText] = React.useState((gg.fragmente || []).join('\n'));
+  const [monolog, setMonolog] = React.useState(etappe.tages_monolog || '');
+  const ggInput = { width: '100%', boxSizing: 'border-box', fontFamily: T.sans, fontSize: 13, padding: '7px 10px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg, color: T.ink };
 
   const fotoUrl = (nr) => (fotos.find(f => f.foto_nr === nr)?.bildgen_datei || '');
   const keyFotoNrs = cluster.insel_foto_nrs || (etappe.featured_foto_nrs || []).slice(0, 6);
 
   async function freigeben() {
     setSaving(true);
-    await patchEtappe(etappe.id, {
+    const fragmente = fragmenteText.split('\n').map(s => s.trim()).filter(Boolean);
+    const patch = {
       hitl_prio_stil: prio,
       hitl_zusatz_foto_nrs: gagSel.length > 0 ? gagSel : null,
       hitl_kommentar: kommentar || null,
+      // editiertes Grundgerüst überschreibt das vom Plan generierte (übrige Keys bleiben erhalten)
+      narrator_grundgeruest: { ...gg, thema: thema.trim() || null, ton: ton.trim() || null, fragmente },
       hitl1_entschieden_um: new Date().toISOString(),
-    });
+    };
+    if ((etappe.tages_monolog || '') !== monolog) patch.tages_monolog = monolog.trim() || null;
+    await patchEtappe(etappe.id, patch);
     setSaving(false);
     onFreigegeben?.();
   }
@@ -2162,20 +2217,21 @@ function Hitl1Panel({ etappe, fotos, onFreigegeben }) {
         </div>
       </div>
 
-      {(gg.thema || gg.ton) && (
-        <div style={{ background: T.accentSoft, borderRadius: 8, padding: '10px 14px', marginBottom: 16, fontSize: 13, fontFamily: T.sans }}>
-          {gg.thema && <div><b>Thema:</b> {gg.thema}</div>}
-          {gg.ton && <div style={{ marginTop: 4 }}><b>Ton:</b> {gg.ton}</div>}
-          {gg.fragmente?.length > 0 && (
-            <div style={{ marginTop: 6 }}>
-              <b>Fragmente:</b>
-              <ul style={{ margin: '4px 0 0 16px', padding: 0 }}>
-                {gg.fragmente.map((f, i) => <li key={i} style={{ marginBottom: 2 }}>{f}</li>)}
-              </ul>
-            </div>
-          )}
-        </div>
-      )}
+      <div style={{ background: T.accentSoft, borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontFamily: T.sans }}>
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Grundgerüst (editierbar)</div>
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 3, color: T.ink }}>Thema</label>
+        <input value={thema} onChange={e => setThema(e.target.value)} style={ggInput} />
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, margin: '10px 0 3px', color: T.ink }}>Ton</label>
+        <input value={ton} onChange={e => setTon(e.target.value)} style={ggInput} />
+        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, margin: '10px 0 3px', color: T.ink }}>Fragmente (eine Zeile pro Fragment)</label>
+        <textarea rows={Math.max(3, (gg.fragmente || []).length)} value={fragmenteText} onChange={e => setFragmenteText(e.target.value)} style={{ ...ggInput, resize: 'vertical' }} />
+        {(etappe.tages_monolog || monolog) && (
+          <React.Fragment>
+            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, margin: '10px 0 3px', color: T.ink }}>Monolog (Rückgrat)</label>
+            <textarea rows={4} value={monolog} onChange={e => setMonolog(e.target.value)} style={{ ...ggInput, resize: 'vertical' }} />
+          </React.Fragment>
+        )}
+      </div>
 
       {keyFotoNrs.length > 0 && (
         <div style={{ marginBottom: 16 }}>
