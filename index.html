@@ -2239,12 +2239,11 @@ function MonologPanel() {
         method: 'PATCH', headers: h,
         body: JSON.stringify({
           monolog_final: text.trim() || null,
-          hitl1_entschieden_um: new Date().toISOString(),
         }),
       });
     }
     setSaving(false);
-    setStatus('✓ Freigegeben — Narrator nimmt den Text beim nächsten Run');
+    setStatus('✓ Freigegeben — Narrator nimmt den Text als Tonquelle');
   }
 
   // Wege aus den geladenen Monologen ableiten — nur die mit Inhalt tauchen als Chip auf.
@@ -2334,7 +2333,7 @@ function MonologPanel() {
 
 // ─── HITL #1 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl1() {
-  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,tages_monolog,monolog_final,startort,zielort,hitl1_benachrichtigt_um,hitl1_entschieden_um';
+  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,startort,zielort,reel_varianten,hitl_prio_stil,hitl1_benachrichtigt_um,hitl1_entschieden_um';
   const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&hitl1_benachrichtigt_um=not.is.null&hitl1_entschieden_um=is.null&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
@@ -2348,15 +2347,28 @@ async function fetchFotosForEtappe(etappeId) {
   return res.json();
 }
 
+const HITL1_STILE = ['ki_narrator', 'impact', 'selfie_first', 'rap'];
+
 function Hitl1Panel({ etappe, onFreigegeben }) {
   const [saving, setSaving] = React.useState(false);
   const [startort, setStartort] = React.useState(etappe.startort || '');
   const [zielort, setZielort] = React.useState(etappe.zielort || '');
-  // Vorbelegt mit monolog_final (falls bereits abgenickt) oder tages_monolog (gesäubert).
-  // Speichern schreibt nach monolog_final — Narrator nimmt monolog_final, sonst tages_monolog.
-  const [monolog, setMonolog] = React.useState(etappe.monolog_final || etappe.tages_monolog || '');
-  const fieldInput = { width: '100%', boxSizing: 'border-box', fontFamily: T.sans, fontSize: 14, lineHeight: 1.5, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg, color: T.ink };
+  const [kommentar, setKommentar] = React.useState('');
 
+  // Verfügbare Varianten aus reel_varianten (enthält Narrator-Texte beider Stile)
+  const varianten = React.useMemo(() => {
+    try { return JSON.parse(etappe.reel_varianten || '[]'); } catch { return []; }
+  }, [etappe.reel_varianten]);
+
+  // Prio-Stil-Picker: Default = was die Pipeline vorbelegt hat (hitl_prio_stil oder erster Stil aus varianten)
+  const defaultStil = etappe.hitl_prio_stil || (varianten[0]?.stil) || '';
+  const [prioStil, setPrioStil] = React.useState(defaultStil);
+
+  // Text der aktuell gewählten Variante anzeigen
+  const aktiveVariante = varianten.find(v => v.stil === prioStil) || varianten[0];
+  const narratorText = aktiveVariante?.erzaehler_lang || '';
+
+  const fieldInput = { width: '100%', boxSizing: 'border-box', fontFamily: T.sans, fontSize: 14, lineHeight: 1.5, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg, color: T.ink };
   const isPreview = etappe.id === '__preview__';
 
   async function freigeben() {
@@ -2364,7 +2376,8 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
     setSaving(true);
     const patch = {
       hitl1_entschieden_um: new Date().toISOString(),
-      monolog_final: monolog.trim() || null,
+      hitl_prio_stil: prioStil || null,
+      hitl_kommentar: kommentar.trim() || null,
       startort: startort.trim() || null,
       zielort: zielort.trim() || null,
     };
@@ -2380,7 +2393,7 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
           <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: 0, color: T.ink }}>
-            Monolog-Check — Tag {etappe.etappen_nr} ({etappe.datum})
+            Narrator-Check — Tag {etappe.etappen_nr} ({etappe.datum})
           </h2>
           {bereitsEntschieden && <span style={{ fontSize: 12, color: T.ok, fontFamily: T.mono }}>✓ Bereits freigegeben</span>}
         </div>
@@ -2397,10 +2410,46 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
         </div>
       </div>
 
-      <div style={{ background: T.accentSoft, borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontFamily: T.sans }}>
-        <div style={{ fontSize: 12, color: T.muted, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Gesäuberter Monolog (editierbar)</div>
-        <textarea rows={14} value={monolog} onChange={e => setMonolog(e.target.value)} disabled={isPreview}
-          placeholder="Noch kein Monolog gespeichert." style={{ ...fieldInput, resize: 'vertical' }} />
+      {/* Prio-Stil-Picker */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Prio-Stil (geht als erstes raus)</div>
+        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+          {(varianten.length > 0 ? varianten.map(v => v.stil) : HITL1_STILE).map(stil => (
+            <button key={stil} onClick={() => setPrioStil(stil)} disabled={isPreview}
+              style={{ fontFamily: T.sans, fontSize: 13, fontWeight: prioStil === stil ? 700 : 400, padding: '6px 14px', borderRadius: 20, border: `1.5px solid ${prioStil === stil ? T.accent : T.border}`, cursor: isPreview ? 'not-allowed' : 'pointer', background: prioStil === stil ? T.accentSoft : 'transparent', color: prioStil === stil ? T.accentInk : T.muted }}>
+              {stil}
+            </button>
+          ))}
+        </div>
+      </div>
+
+      {/* Narrator-Text der gewählten Variante (read-only) */}
+      <div style={{ background: T.accentSoft, borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>
+          Narrator-Text · {aktiveVariante?.stil || '—'}
+        </div>
+        {narratorText ? (
+          <div style={{ fontFamily: T.sans, fontSize: 14, lineHeight: 1.6, color: T.ink, whiteSpace: 'pre-wrap' }}>
+            {narratorText}
+          </div>
+        ) : (
+          <div style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, fontStyle: 'italic' }}>
+            Noch kein Narrator-Text verfügbar.
+          </div>
+        )}
+      </div>
+
+      {/* Kommentar / Korrektur-Anweisung */}
+      <div style={{ marginBottom: 16 }}>
+        <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Kommentar / Korrektur (optional)</div>
+        <textarea rows={3} value={kommentar} onChange={e => setKommentar(e.target.value)} disabled={isPreview}
+          placeholder="z.B. »zu lang, Einleitung kürzen« oder »mehr Situationskomik reinbringen« — der Narrator läuft nochmal mit dieser Anweisung."
+          style={{ ...fieldInput, resize: 'vertical' }} />
+        {kommentar.trim() && (
+          <div style={{ fontSize: 11, color: T.warn, fontFamily: T.sans, marginTop: 4 }}>
+            ↺ Narrator-Text wird mit dieser Korrektur neu generiert bevor die Audio-Produktion startet.
+          </div>
+        )}
       </div>
 
       <button onClick={freigeben} disabled={saving || bereitsEntschieden || isPreview}
@@ -2433,7 +2482,8 @@ function TabHitl1() {
           Keine offenen Etappen — Vorschau:
         </div>
         <Hitl1Panel etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', startort: '', zielort: '',
-          tages_monolog: '', monolog_final: '', hitl1_entschieden_um: null }}
+          reel_varianten: JSON.stringify([{ stil: 'ki_narrator', erzaehler_lang: '' }]),
+          hitl_prio_stil: null, hitl1_entschieden_um: null }}
           onFreigegeben={laden} />
       </div>
     );
