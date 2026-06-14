@@ -2283,7 +2283,7 @@ function MonologPanel() {
 
 // ─── HITL #1 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl1() {
-  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,reel_stil,narrator_grundgeruest,tages_monolog,foto_cluster,featured_foto_nrs,hitl_prio_stil,hitl1_benachrichtigt_um,hitl1_entschieden_um,hitl_kommentar,hitl_zusatz_foto_nrs';
+  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,tages_monolog,monolog_final,hitl1_benachrichtigt_um,hitl1_entschieden_um';
   const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&pipeline_status=eq.narrator_fertig&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
@@ -2297,38 +2297,19 @@ async function fetchFotosForEtappe(etappeId) {
   return res.json();
 }
 
-function Hitl1Panel({ etappe, fotos, onFreigegeben }) {
-  const gg = etappe.narrator_grundgeruest || {};
-  const cluster = etappe.foto_cluster || {};
-  const gags = cluster.zusatz_momente || [];
-  const stile = ['ki_narrator', 'impact', 'rap', 'selfie_first'];
-  // Default = der für diesen Tag rotierte Stil (etappe.reel_stil), im HITL änderbar.
-  const [prio, setPrio] = React.useState(etappe.hitl_prio_stil || etappe.reel_stil || 'ki_narrator');
-  const [gagSel, setGagSel] = React.useState([]);
-  const [kommentar, setKommentar] = React.useState('');
+function Hitl1Panel({ etappe, onFreigegeben }) {
   const [saving, setSaving] = React.useState(false);
-  // Grundgerüst direkt editierbar — die finale Narrator-Stufe liest es aus der DB.
-  const [thema, setThema] = React.useState(gg.thema || '');
-  const [ton, setTon] = React.useState(gg.ton || '');
-  const [fragmenteText, setFragmenteText] = React.useState((gg.fragmente || []).join('\n'));
-  const [monolog, setMonolog] = React.useState(etappe.tages_monolog || '');
-  const ggInput = { width: '100%', boxSizing: 'border-box', fontFamily: T.sans, fontSize: 13, padding: '7px 10px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg, color: T.ink };
-
-  const fotoUrl = (nr) => (fotos.find(f => f.foto_nr === nr)?.bildgen_datei || '');
-  const keyFotoNrs = cluster.insel_foto_nrs || (etappe.featured_foto_nrs || []).slice(0, 6);
+  // Vorbelegt mit monolog_final (falls bereits abgenickt) oder tages_monolog (gesäubert).
+  // Speichern schreibt nach monolog_final — Narrator nimmt monolog_final, sonst tages_monolog.
+  const [monolog, setMonolog] = React.useState(etappe.monolog_final || etappe.tages_monolog || '');
+  const ggInput = { width: '100%', boxSizing: 'border-box', fontFamily: T.sans, fontSize: 14, lineHeight: 1.5, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg, color: T.ink };
 
   async function freigeben() {
     setSaving(true);
-    const fragmente = fragmenteText.split('\n').map(s => s.trim()).filter(Boolean);
     const patch = {
-      hitl_prio_stil: prio,
-      hitl_zusatz_foto_nrs: gagSel.length > 0 ? gagSel : null,
-      hitl_kommentar: kommentar || null,
-      // editiertes Grundgerüst überschreibt das vom Plan generierte (übrige Keys bleiben erhalten)
-      narrator_grundgeruest: { ...gg, thema: thema.trim() || null, ton: ton.trim() || null, fragmente },
       hitl1_entschieden_um: new Date().toISOString(),
+      monolog_final: monolog.trim() || null,
     };
-    if ((etappe.tages_monolog || '') !== monolog) patch.tages_monolog = monolog.trim() || null;
     await patchEtappe(etappe.id, patch);
     setSaving(false);
     onFreigegeben?.();
@@ -2341,80 +2322,21 @@ function Hitl1Panel({ etappe, fotos, onFreigegeben }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
           <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: 0, color: T.ink }}>
-            Plan-Check — Tag {etappe.etappen_nr} ({etappe.datum})
+            Monolog-Check — Tag {etappe.etappen_nr} ({etappe.datum})
           </h2>
           {bereitsEntschieden && <span style={{ fontSize: 12, color: T.ok, fontFamily: T.mono }}>✓ Bereits freigegeben</span>}
         </div>
       </div>
 
       <div style={{ background: T.accentSoft, borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontFamily: T.sans }}>
-        <div style={{ fontSize: 12, color: T.muted, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Grundgerüst (editierbar)</div>
-        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, marginBottom: 3, color: T.ink }}>Thema</label>
-        <input value={thema} onChange={e => setThema(e.target.value)} style={ggInput} />
-        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, margin: '10px 0 3px', color: T.ink }}>Ton</label>
-        <input value={ton} onChange={e => setTon(e.target.value)} style={ggInput} />
-        <label style={{ display: 'block', fontSize: 12, fontWeight: 600, margin: '10px 0 3px', color: T.ink }}>Fragmente (eine Zeile pro Fragment)</label>
-        <textarea rows={Math.max(3, (gg.fragmente || []).length)} value={fragmenteText} onChange={e => setFragmenteText(e.target.value)} style={{ ...ggInput, resize: 'vertical' }} />
-        {(etappe.tages_monolog || monolog) && (
-          <React.Fragment>
-            <label style={{ display: 'block', fontSize: 12, fontWeight: 600, margin: '10px 0 3px', color: T.ink }}>Monolog (Rückgrat)</label>
-            <textarea rows={4} value={monolog} onChange={e => setMonolog(e.target.value)} style={{ ...ggInput, resize: 'vertical' }} />
-          </React.Fragment>
-        )}
-      </div>
-
-      {keyFotoNrs.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Schlüsselfotos</div>
-          <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-            {keyFotoNrs.map(nr => {
-              const url = fotoUrl(nr);
-              return (
-                <figure key={nr} style={{ margin: 0, textAlign: 'center' }}>
-                  {url
-                    ? <img src={url} width={90} height={90} style={{ objectFit: 'cover', borderRadius: 6, border: `1px solid ${T.border}` }} onError={e => e.target.style.display='none'} />
-                    : <div style={{ width: 90, height: 90, background: T.surfaceAlt, borderRadius: 6, display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 11, color: T.muted }}>{nr}</div>
-                  }
-                  <figcaption style={{ fontSize: 10, color: T.muted, fontFamily: T.mono, marginTop: 2 }}>{nr}</figcaption>
-                </figure>
-              );
-            })}
-          </div>
-        </div>
-      )}
-
-      {gags.length > 0 && (
-        <div style={{ marginBottom: 16 }}>
-          <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Optionale Gags</div>
-          {gags.map(g => (
-            <label key={g.foto_nr} style={{ display: 'flex', alignItems: 'flex-start', gap: 8, marginBottom: 6, cursor: 'pointer', fontSize: 13, fontFamily: T.sans }}>
-              <input type="checkbox" checked={gagSel.includes(g.foto_nr)}
-                onChange={e => setGagSel(s => e.target.checked ? [...s, g.foto_nr] : s.filter(x => x !== g.foto_nr))}
-                style={{ marginTop: 2 }} />
-              <span><b>{g.foto_nr}</b>: {g.notiz}</span>
-            </label>
-          ))}
-        </div>
-      )}
-
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Prio-Stil (postet zuerst)</div>
-        <select value={prio} onChange={e => setPrio(e.target.value)}
-          style={{ fontFamily: T.sans, fontSize: 14, padding: '8px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, width: '100%' }}>
-          {stile.map(s => <option key={s} value={s}>{s}</option>)}
-        </select>
-      </div>
-
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Kommentar / Steuerung</div>
-        <textarea rows={3} placeholder="z.B. Mehr den Regen betonen, weniger Geschichte…" value={kommentar}
-          onChange={e => setKommentar(e.target.value)}
-          style={{ width: '100%', fontFamily: T.sans, fontSize: 13, padding: '8px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, resize: 'vertical' }} />
+        <div style={{ fontSize: 12, color: T.muted, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Gesäuberter Monolog (editierbar)</div>
+        <textarea rows={14} value={monolog} onChange={e => setMonolog(e.target.value)}
+          placeholder="Noch kein Monolog gespeichert." style={{ ...ggInput, resize: 'vertical' }} />
       </div>
 
       <button onClick={freigeben} disabled={saving || bereitsEntschieden}
         style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || bereitsEntschieden) ? 'not-allowed' : 'pointer', background: bereitsEntschieden ? T.surfaceAlt : T.accent, color: bereitsEntschieden ? T.mutedSoft : '#fff' }}>
-        {bereitsEntschieden ? '✓ Plan freigegeben' : saving ? '…' : 'Plan ok →'}
+        {bereitsEntschieden ? '✓ Freigegeben' : saving ? '…' : 'Freigeben →'}
       </button>
     </div>
   );
@@ -2422,18 +2344,12 @@ function Hitl1Panel({ etappe, fotos, onFreigegeben }) {
 
 function TabHitl1() {
   const [etappen, setEtappen] = React.useState([]);
-  const [fotoMap, setFotoMap] = React.useState({});
   const [loading, setLoading] = React.useState(true);
 
   async function laden() {
     setLoading(true);
     const rows = await fetchEtappenFuerHitl1();
     setEtappen(rows);
-    const maps = {};
-    await Promise.all(rows.map(async e => {
-      maps[e.id] = await fetchFotosForEtappe(e.id);
-    }));
-    setFotoMap(maps);
     setLoading(false);
   }
 
@@ -2445,7 +2361,7 @@ function TabHitl1() {
   return (
     <div>
       {etappen.map(e => (
-        <Hitl1Panel key={e.id} etappe={e} fotos={fotoMap[e.id] || []} onFreigegeben={laden} />
+        <Hitl1Panel key={e.id} etappe={e} onFreigegeben={laden} />
       ))}
     </div>
   );
