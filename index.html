@@ -2284,7 +2284,7 @@ function MonologPanel() {
 // ─── HITL #1 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl1() {
   const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,tages_monolog,monolog_final,hitl1_benachrichtigt_um,hitl1_entschieden_um';
-  const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&pipeline_status=eq.narrator_fertig&order=datum.desc&limit=10`;
+  const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&hitl1_benachrichtigt_um=not.is.null&hitl1_entschieden_um=is.null&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
   return res.json();
