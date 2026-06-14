@@ -2185,20 +2185,66 @@ function MonologPanel() {
     }
   }
 
-  // Leichte KI-Säuberung — gibt den geputzten Text zurück ins Feld, du liest gegen.
+  // Säubern + Speichern in einem Schritt — der geputzte Text geht direkt in die DB.
   async function saeubern() {
     if (!text.trim()) return;
-    setSaving(true); setStatus('… säubere');
+    setSaving(true); setStatus('… säubere & speichere');
     const res = await sendMonolog(datum, text, false);
+    if (!res.gesaeubert) { setSaving(false); setStatus('Fehler: ' + (res.error || 'unbekannt')); return; }
+    const save = await sendMonolog(datum, res.gesaeubert, true);
     setSaving(false);
-    if (res.gesaeubert) { setText(res.gesaeubert); setStatus('✓ Gesäubert — bitte gegenlesen, dann Speichern'); }
-    else setStatus('Fehler: ' + (res.error || 'unbekannt'));
+    if (save.ok) {
+      setText(res.gesaeubert);
+      setStatus('✓ Gespeichert');
+      setListe(prev => {
+        const idx = prev.findIndex(p => p.datum === datum);
+        const eintrag = {
+          id: prev[idx]?.id || `local-${datum}`,
+          datum, etappen_nr: null, tag_nr: null,
+          tagesueberschrift: prev[idx]?.tagesueberschrift || null,
+          tages_monolog: res.gesaeubert.trim(),
+          route: prev[idx]?.route || null,
+        };
+        return idx >= 0
+          ? [eintrag, ...prev.filter((_, i) => i !== idx)]
+          : [eintrag, ...prev];
+      });
+    } else {
+      setStatus('Fehler beim Speichern: ' + (save.error || 'unbekannt'));
+    }
   }
 
   function pick(e) {
     setDatum(e.datum);
     setStatus(null);
     if (mobile && typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
+  }
+
+  // Monolog direkt freigeben — schreibt nach monolog_final + setzt hitl1_entschieden_um,
+  // damit der Narrator den Text beim nächsten Run nimmt und HITL #1 nicht nochmal triggert.
+  // Startort/Zielort werden aus dem passenden Etappen-Datensatz geholt, falls vorhanden.
+  async function freigeben() {
+    if (!text.trim()) return;
+    setSaving(true); setStatus('… freigeben');
+    // Erst sauber speichern
+    const save = await sendMonolog(datum, text, true);
+    if (!save.ok) { setSaving(false); setStatus('Fehler beim Speichern: ' + (save.error || 'unbekannt')); return; }
+    // Dann Etappe patchen (etappe_id über die Liste finden, sonst leer anlegen wenn keiner da ist)
+    const h = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=minimal' };
+    const find = await fetch(`${SUPABASE_URL}/rest/v1/etappen?datum=eq.${datum}&select=id,startort,zielort&limit=1`, { headers: h });
+    const rows = find.ok ? await find.json() : [];
+    const eintrag = rows[0];
+    if (eintrag?.id) {
+      await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${eintrag.id}`, {
+        method: 'PATCH', headers: h,
+        body: JSON.stringify({
+          monolog_final: text.trim() || null,
+          hitl1_entschieden_um: new Date().toISOString(),
+        }),
+      });
+    }
+    setSaving(false);
+    setStatus('✓ Freigegeben — Narrator nimmt den Text beim nächsten Run');
   }
 
   // Wege aus den geladenen Monologen ableiten — nur die mit Inhalt tauchen als Chip auf.
@@ -2218,8 +2264,8 @@ function MonologPanel() {
   const aktiv = text.trim() && !saving && !laden;
 
   return (
-    <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'minmax(0, 1fr) 320px', gap: 20, alignItems: 'start' }}>
-      <div style={{ maxWidth: mobile ? '100%' : 640, padding: 24, background: T.surface, borderRadius: 12, border: `1px solid ${T.border}` }}>
+    <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : 'minmax(0, 1fr) 320px', gap: 0, alignItems: 'start', background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, overflow: 'hidden', width: 'fit-content', maxWidth: '100%' }}>
+      <div style={{ maxWidth: mobile ? '100%' : 640, padding: 24, borderRight: mobile ? 'none' : `1px solid ${T.border}`, borderBottom: mobile ? `1px solid ${T.border}` : 'none' }}>
         <h2 style={{ fontFamily: T.serif, fontSize: 22, fontWeight: 400, margin: '0 0 16px', color: T.ink }}>Tages-Monolog</h2>
         <div style={{ marginBottom: 12 }}>
           <label style={{ display: 'block', fontSize: 13, color: T.muted, marginBottom: 4 }}>Datum</label>
@@ -2232,18 +2278,23 @@ function MonologPanel() {
             onChange={e => setText(e.target.value)}
             style={{ width: '100%', fontFamily: T.sans, fontSize: 14, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, resize: 'vertical', opacity: laden ? 0.5 : 1 }} />
         </div>
-        <div style={{ display: 'flex', gap: 10, alignItems: 'center' }}>
+        <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <button onClick={saeubern} disabled={!aktiv}
-            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: `1px solid ${aktiv ? T.accent : T.border}`, cursor: aktiv ? 'pointer' : 'not-allowed', background: 'transparent', color: aktiv ? T.accent : T.mutedSoft }}>
-            ✨ Säubern
+            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: aktiv ? 'pointer' : 'not-allowed', background: aktiv ? T.accent : T.surfaceAlt, color: aktiv ? '#fff' : T.mutedSoft }}>
+            {saving ? '…' : '✨ Säubern & Speichern'}
           </button>
           <button onClick={speichern} disabled={!aktiv}
-            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: aktiv ? 'pointer' : 'not-allowed', background: aktiv ? T.accent : T.surfaceAlt, color: aktiv ? '#fff' : T.mutedSoft }}>
-            {saving ? '…' : 'Speichern'}
+            style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 500, padding: '8px 14px', borderRadius: 8, border: `1px solid ${T.border}`, cursor: aktiv ? 'pointer' : 'not-allowed', background: 'transparent', color: T.muted }}>
+            nur Speichern
+          </button>
+          <button onClick={freigeben} disabled={!aktiv} title="Speichert den Monolog und markiert die Etappe als freigegeben — der Narrator nimmt den Text dann direkt, HITL #1 entfällt."
+            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: aktiv ? 'pointer' : 'not-allowed', background: aktiv ? T.ok : T.surfaceAlt, color: aktiv ? '#fff' : T.mutedSoft }}>
+            {saving ? '…' : '✓ Freigeben'}
           </button>
         </div>
         <p style={{ marginTop: 10, fontSize: 12, color: T.muted, fontFamily: T.sans }}>
-          Diktieren → <b>Säubern</b> (glättet leicht, lässt deinen Stil) → gegenlesen → <b>Speichern</b>.
+          Diktieren → <b>Säubern & Speichern</b>. Roh reinschreiben, die KI glättet und legt ab.
+          <br/><b>Freigeben</b> sichert den Text und markiert die Etappe als entschieden — der nächste Run nimmt ihn direkt, ohne nochmal in HITL #1 zu landen.
         </p>
         {status && (
           <p style={{ marginTop: 12, fontSize: 13, color: status.startsWith('✓') ? T.ok : T.err, fontFamily: T.mono }}>
@@ -2252,7 +2303,7 @@ function MonologPanel() {
         )}
       </div>
 
-      <aside style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18, position: mobile ? 'static' : 'sticky', top: 20 }}>
+      <aside style={{ background: T.surfaceAlt, padding: 18 }}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 14 }}>
           <span className={`sk-chip ${activeRoute === null ? 'active' : ''}`} onClick={() => setActiveRoute(null)}>Alle</span>
           {routen.map(r => (
@@ -2306,7 +2357,10 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
   const [monolog, setMonolog] = React.useState(etappe.monolog_final || etappe.tages_monolog || '');
   const fieldInput = { width: '100%', boxSizing: 'border-box', fontFamily: T.sans, fontSize: 14, lineHeight: 1.5, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg, color: T.ink };
 
+  const isPreview = etappe.id === '__preview__';
+
   async function freigeben() {
+    if (isPreview) return;
     setSaving(true);
     const patch = {
       hitl1_entschieden_um: new Date().toISOString(),
@@ -2322,7 +2376,7 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
   const bereitsEntschieden = !!etappe.hitl1_entschieden_um;
 
   return (
-    <div style={{ maxWidth: 680, background: T.surface, borderRadius: 12, border: `1px solid ${T.border}`, padding: 24, marginBottom: 20 }}>
+    <div style={{ maxWidth: 680, background: T.surface, borderRadius: 12, border: `1px solid ${T.border}`, padding: 24, marginBottom: 20, opacity: isPreview ? 0.6 : 1 }}>
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
           <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: 0, color: T.ink }}>
@@ -2335,22 +2389,22 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
       <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Startort</div>
-          <input value={startort} onChange={e => setStartort(e.target.value)} style={fieldInput} />
+          <input value={startort} onChange={e => setStartort(e.target.value)} disabled={isPreview} style={fieldInput} />
         </div>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Zielort</div>
-          <input value={zielort} onChange={e => setZielort(e.target.value)} style={fieldInput} />
+          <input value={zielort} onChange={e => setZielort(e.target.value)} disabled={isPreview} style={fieldInput} />
         </div>
       </div>
 
       <div style={{ background: T.accentSoft, borderRadius: 8, padding: '12px 14px', marginBottom: 16, fontFamily: T.sans }}>
         <div style={{ fontSize: 12, color: T.muted, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Gesäuberter Monolog (editierbar)</div>
-        <textarea rows={14} value={monolog} onChange={e => setMonolog(e.target.value)}
+        <textarea rows={14} value={monolog} onChange={e => setMonolog(e.target.value)} disabled={isPreview}
           placeholder="Noch kein Monolog gespeichert." style={{ ...fieldInput, resize: 'vertical' }} />
       </div>
 
-      <button onClick={freigeben} disabled={saving || bereitsEntschieden}
-        style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || bereitsEntschieden) ? 'not-allowed' : 'pointer', background: bereitsEntschieden ? T.surfaceAlt : T.accent, color: bereitsEntschieden ? T.mutedSoft : '#fff' }}>
+      <button onClick={freigeben} disabled={saving || bereitsEntschieden || isPreview}
+        style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || bereitsEntschieden || isPreview) ? 'not-allowed' : 'pointer', background: (bereitsEntschieden || isPreview) ? T.surfaceAlt : T.accent, color: (bereitsEntschieden || isPreview) ? T.mutedSoft : '#fff' }}>
         {bereitsEntschieden ? '✓ Freigegeben' : saving ? '…' : 'Freigeben →'}
       </button>
     </div>
@@ -2371,7 +2425,19 @@ function TabHitl1() {
   React.useEffect(() => { laden(); }, []);
 
   if (loading) return <div style={{ padding: 24, fontFamily: T.sans, color: T.muted, fontSize: 14 }}>Lade…</div>;
-  if (!etappen.length) return <div style={{ padding: 24, fontFamily: T.sans, color: T.muted, fontSize: 14 }}>Keine Etappen warten auf HITL #1.</div>;
+  if (!etappen.length) {
+    return (
+      <div>
+        <div style={{ padding: '10px 16px', marginBottom: 16, background: T.surfaceAlt, border: `1px solid ${T.border}`,
+          borderRadius: 8, fontSize: 13, color: T.muted, fontFamily: T.sans }}>
+          Keine offenen Etappen — Vorschau:
+        </div>
+        <Hitl1Panel etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', startort: '', zielort: '',
+          tages_monolog: '', monolog_final: '', hitl1_entschieden_um: null }}
+          onFreigegeben={laden} />
+      </div>
+    );
+  }
 
   return (
     <div>
@@ -2409,7 +2475,10 @@ function Hitl2Veto({ etappe, onVeto }) {
   })();
   const prioVariante = varianten[0];
 
+  const isPreview = etappe.id === '__preview__';
+
   async function setzeVeto() {
+    if (isPreview) return;
     setSaving(true);
     await patchEtappe(etappe.id, { veto: true });
     setSaving(false);
@@ -2417,7 +2486,7 @@ function Hitl2Veto({ etappe, onVeto }) {
   }
 
   return (
-    <div style={{ maxWidth: 540, background: T.surface, borderRadius: 12, border: `2px solid ${offen ? T.accent : T.border}`, padding: 24, marginBottom: 20 }}>
+    <div style={{ maxWidth: 540, background: T.surface, borderRadius: 12, border: `2px solid ${offen ? T.accent : T.border}`, padding: 24, marginBottom: 20, opacity: isPreview ? 0.6 : 1 }}>
       <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: '0 0 8px', color: T.ink }}>
         Prio-Reel bereit — Tag {etappe.etappen_nr} ({etappe.datum})
       </h2>
@@ -2449,8 +2518,8 @@ function Hitl2Veto({ etappe, onVeto }) {
             <b style={{ color: T.warn }}>Geht raus um {ziel.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</b>
             {verbleibend !== null && <span style={{ color: T.muted }}> — noch {verbleibend} Min</span>}
           </div>
-          <button onClick={setzeVeto} disabled={saving}
-            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: saving ? 'not-allowed' : 'pointer', background: T.err, color: '#fff' }}>
+          <button onClick={setzeVeto} disabled={saving || isPreview}
+            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || isPreview) ? 'not-allowed' : 'pointer', background: isPreview ? T.surfaceAlt : T.err, color: isPreview ? T.mutedSoft : '#fff' }}>
             {saving ? '…' : '⛔ Veto — nicht posten'}
           </button>
         </div>
@@ -2477,7 +2546,19 @@ function TabHitl2() {
   React.useEffect(() => { laden(); }, []);
 
   if (loading) return <div style={{ padding: 24, fontFamily: T.sans, color: T.muted, fontSize: 14 }}>Lade…</div>;
-  if (!etappen.length) return <div style={{ padding: 24, fontFamily: T.sans, color: T.muted, fontSize: 14 }}>Kein Reel wartet auf Freigabe.</div>;
+  if (!etappen.length) {
+    return (
+      <div>
+        <div style={{ padding: '10px 16px', marginBottom: 16, background: T.surfaceAlt, border: `1px solid ${T.border}`,
+          borderRadius: 8, fontSize: 13, color: T.muted, fontFamily: T.sans }}>
+          Kein Reel wartet auf Freigabe — Vorschau:
+        </div>
+        <Hitl2Veto etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', pipeline_status: 'reel_freigabe',
+          post_geplant_um: null, veto: false, reel_varianten: JSON.stringify([{ stil: '—', reel_datei: null, instagram_caption: '' }]) }}
+          onVeto={laden} />
+      </div>
+    );
+  }
 
   return (
     <div>
