@@ -2500,7 +2500,7 @@ function TabHitl1() {
 
 // ─── HITL #2 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl2() {
-  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,post_geplant_um,veto,reel_varianten';
+  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,post_geplant_um,veto,freigabe,reel_varianten';
   const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&pipeline_status=eq.reel_freigabe&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
@@ -2517,7 +2517,7 @@ function Hitl2Veto({ etappe, onVeto }) {
     return () => clearInterval(iv);
   }, []);
 
-  const offen = ziel && ziel > now && !etappe.veto;
+  const offen = ziel && ziel > now && !etappe.veto && !etappe.freigabe;
   const verbleibend = ziel ? Math.max(0, Math.round((ziel - now) / 60000)) : null;
 
   const varianten = (() => {
@@ -2531,6 +2531,14 @@ function Hitl2Veto({ etappe, onVeto }) {
     if (isPreview) return;
     setSaving(true);
     await patchEtappe(etappe.id, { veto: true });
+    setSaving(false);
+    onVeto?.();
+  }
+
+  async function setzeFreigabe() {
+    if (isPreview) return;
+    setSaving(true);
+    await patchEtappe(etappe.id, { freigabe: true });
     setSaving(false);
     onVeto?.();
   }
@@ -2560,7 +2568,11 @@ function Hitl2Veto({ etappe, onVeto }) {
 
       {etappe.veto ? (
         <div style={{ background: T.errSoft, border: `1px solid ${T.err}`, borderRadius: 8, padding: '10px 14px', fontSize: 13, fontFamily: T.sans, color: T.err, fontWeight: 600 }}>
-          ⛔ Veto gesetzt — Reel wird NICHT gepostet.
+          ⛔ Veto gesetzt — Prio-Reel wird NICHT gepostet. Origbilder + Overnight laufen weiter.
+        </div>
+      ) : etappe.freigabe ? (
+        <div style={{ background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 8, padding: '10px 14px', fontSize: 13, fontFamily: T.sans, color: T.accentInk, fontWeight: 600 }}>
+          ✅ Freigegeben — Reel geht sofort raus.
         </div>
       ) : offen ? (
         <div>
@@ -2568,10 +2580,16 @@ function Hitl2Veto({ etappe, onVeto }) {
             <b style={{ color: T.warn }}>Geht raus um {ziel.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</b>
             {verbleibend !== null && <span style={{ color: T.muted }}> — noch {verbleibend} Min</span>}
           </div>
-          <button onClick={setzeVeto} disabled={saving || isPreview}
-            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || isPreview) ? 'not-allowed' : 'pointer', background: isPreview ? T.surfaceAlt : T.err, color: isPreview ? T.mutedSoft : '#fff' }}>
-            {saving ? '…' : '⛔ Veto — nicht posten'}
-          </button>
+          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
+            <button onClick={setzeFreigabe} disabled={saving || isPreview}
+              style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || isPreview) ? 'not-allowed' : 'pointer', background: isPreview ? T.surfaceAlt : T.accent, color: isPreview ? T.mutedSoft : '#fff' }}>
+              {saving ? '…' : '✅ Freigeben — sofort posten'}
+            </button>
+            <button onClick={setzeVeto} disabled={saving || isPreview}
+              style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || isPreview) ? 'not-allowed' : 'pointer', background: isPreview ? T.surfaceAlt : T.err, color: isPreview ? T.mutedSoft : '#fff' }}>
+              {saving ? '…' : '⛔ Veto — Prio verwerfen'}
+            </button>
+          </div>
         </div>
       ) : (
         <div style={{ fontSize: 13, fontFamily: T.sans, color: T.muted }}>
