@@ -2340,6 +2340,17 @@ async function fetchEtappenFuerHitl1() {
   return res.json();
 }
 
+// Archiv: ALLE Tage mit gespeicherten Narrator-Texten (nicht nur die offenen), zum
+// Nachschauen alter Varianten — analog zur Monolog-Liste rechts im Monolog-Tab.
+async function fetchEtappenHistorie() {
+  const cols = 'id,datum,etappen_nr,tag_nr,tagesueberschrift,reel_varianten,hitl_prio_stil,'
+    + 'hitl1_entschieden_um,route:routen(name,kuerzel)';
+  const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&reel_varianten=not.is.null&order=datum.desc&limit=30`;
+  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  if (!res.ok) return [];
+  return res.json();
+}
+
 async function fetchFotosForEtappe(etappeId) {
   const url = `${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${etappeId}&select=foto_nr,bildgen_datei,story_text&order=aufnahmedatum.asc`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
@@ -2353,20 +2364,34 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
   const [saving, setSaving] = React.useState(false);
   const [startort, setStartort] = React.useState(etappe.startort || '');
   const [zielort, setZielort] = React.useState(etappe.zielort || '');
-  const [kommentar, setKommentar] = React.useState('');
 
-  // Verfügbare Varianten aus reel_varianten (enthält Narrator-Texte beider Stile)
+  // Verfügbare Varianten aus reel_varianten (enthält Narrator-Texte aller Stile)
   const varianten = React.useMemo(() => {
     try { return JSON.parse(etappe.reel_varianten || '[]'); } catch { return []; }
   }, [etappe.reel_varianten]);
+
+  const alleStile = varianten.length > 0 ? varianten.map(v => v.stil) : HITL1_STILE;
 
   // Prio-Stil-Picker: Default = was die Pipeline vorbelegt hat (hitl_prio_stil oder erster Stil aus varianten)
   const defaultStil = etappe.hitl_prio_stil || (varianten[0]?.stil) || '';
   const [prioStil, setPrioStil] = React.useState(defaultStil);
 
-  // Text der aktuell gewählten Variante anzeigen
-  const aktiveVariante = varianten.find(v => v.stil === prioStil) || varianten[0];
-  const narratorText = aktiveVariante?.erzaehler_lang || '';
+  // Ein Kommentarfeld pro Stil — vorbefüllt mit dem, was ggf. schon in reel_varianten steckt
+  // (so geht ein gespeicherter Kommentar beim Reload nicht mehr aus der Ansicht verloren).
+  const [kommentare, setKommentare] = React.useState(() => {
+    const init = {};
+    varianten.forEach(v => { if (v?.stil) init[v.stil] = v.kommentar || ''; });
+    return init;
+  });
+  const setKommentarFuer = (stil, text) => setKommentare(prev => ({ ...prev, [stil]: text }));
+  const kopiereAufAlle = (stil) => {
+    const text = kommentare[stil] || '';
+    setKommentare(prev => {
+      const next = { ...prev };
+      alleStile.forEach(s => { next[s] = text; });
+      return next;
+    });
+  };
 
   const fieldInput = { width: '100%', boxSizing: 'border-box', fontFamily: T.sans, fontSize: 14, lineHeight: 1.5, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 6, background: T.bg, color: T.ink };
   const isPreview = etappe.id === '__preview__';
@@ -2374,10 +2399,14 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
   async function freigeben() {
     if (isPreview) return;
     setSaving(true);
+    const patchVarianten = (varianten.length > 0 ? varianten : HITL1_STILE.map(stil => ({ stil }))).map(v => ({
+      ...v,
+      kommentar: (kommentare[v.stil] || '').trim() || null,
+    }));
     const patch = {
       hitl1_entschieden_um: new Date().toISOString(),
       hitl_prio_stil: prioStil || null,
-      hitl_kommentar: kommentar.trim() || null,
+      reel_varianten: JSON.stringify(patchVarianten),
       startort: startort.trim() || null,
       zielort: zielort.trim() || null,
     };
@@ -2399,7 +2428,7 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
         </div>
       </div>
 
-      <div style={{ display: 'flex', gap: 12, marginBottom: 16 }}>
+      <div style={{ display: 'flex', gap: 12, marginBottom: 20 }}>
         <div style={{ flex: 1 }}>
           <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Startort</div>
           <input value={startort} onChange={e => setStartort(e.target.value)} disabled={isPreview} style={fieldInput} />
@@ -2410,47 +2439,51 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
         </div>
       </div>
 
-      {/* Prio-Stil-Picker */}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 6, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Prio-Stil (geht als erstes raus)</div>
-        <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-          {(varianten.length > 0 ? varianten.map(v => v.stil) : HITL1_STILE).map(stil => (
-            <button key={stil} onClick={() => setPrioStil(stil)} disabled={isPreview}
-              style={{ fontFamily: T.sans, fontSize: 13, fontWeight: prioStil === stil ? 700 : 400, padding: '6px 14px', borderRadius: 20, border: `1.5px solid ${prioStil === stil ? T.accent : T.border}`, cursor: isPreview ? 'not-allowed' : 'pointer', background: prioStil === stil ? T.accentSoft : 'transparent', color: prioStil === stil ? T.accentInk : T.muted }}>
-              {stil}
-            </button>
-          ))}
-        </div>
-      </div>
+      {/* Ein Kärtchen pro Stil: Text + eigener Kommentar. Prio-Wahl sitzt direkt am Kärtchen. */}
+      {(varianten.length > 0 ? varianten : HITL1_STILE.map(stil => ({ stil }))).map(v => {
+        const stil = v.stil;
+        const text = v.erzaehler_lang || '';
+        const kommentar = kommentare[stil] || '';
+        const istPrio = prioStil === stil;
+        return (
+          <div key={stil} style={{ border: `1.5px solid ${istPrio ? T.accent : T.border}`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+              <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.ink }}>{stil}</span>
+              <button onClick={() => setPrioStil(stil)} disabled={isPreview}
+                style={{ fontFamily: T.sans, fontSize: 12, fontWeight: istPrio ? 700 : 400, padding: '4px 12px', borderRadius: 20, border: `1.5px solid ${istPrio ? T.accent : T.border}`, cursor: isPreview ? 'not-allowed' : 'pointer', background: istPrio ? T.accentSoft : 'transparent', color: istPrio ? T.accentInk : T.muted }}>
+                {istPrio ? '★ Prio' : 'Als Prio wählen'}
+              </button>
+            </div>
 
-      {/* Narrator-Text der gewählten Variante (read-only) */}
-      <div style={{ background: T.accentSoft, borderRadius: 8, padding: '12px 14px', marginBottom: 16 }}>
-        <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 8, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>
-          Narrator-Text · {aktiveVariante?.stil || '—'}
-        </div>
-        {narratorText ? (
-          <div style={{ fontFamily: T.sans, fontSize: 14, lineHeight: 1.6, color: T.ink, whiteSpace: 'pre-wrap' }}>
-            {narratorText}
-          </div>
-        ) : (
-          <div style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, fontStyle: 'italic' }}>
-            Noch kein Narrator-Text verfügbar.
-          </div>
-        )}
-      </div>
+            {text ? (
+              <div style={{ fontFamily: T.sans, fontSize: 13, lineHeight: 1.55, color: T.ink, whiteSpace: 'pre-wrap', background: T.accentSoft, borderRadius: 6, padding: '10px 12px', marginBottom: 8 }}>
+                {text}
+              </div>
+            ) : (
+              <div style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, fontStyle: 'italic', marginBottom: 8 }}>
+                Noch kein Narrator-Text verfügbar.
+              </div>
+            )}
 
-      {/* Kommentar / Korrektur-Anweisung */}
-      <div style={{ marginBottom: 16 }}>
-        <div style={{ fontSize: 12, color: T.muted, fontFamily: T.sans, marginBottom: 4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5 }}>Kommentar / Korrektur (optional)</div>
-        <textarea rows={3} value={kommentar} onChange={e => setKommentar(e.target.value)} disabled={isPreview}
-          placeholder="z.B. »zu lang, Einleitung kürzen« oder »mehr Situationskomik reinbringen« — der Narrator läuft nochmal mit dieser Anweisung."
-          style={{ ...fieldInput, resize: 'vertical' }} />
-        {kommentar.trim() && (
-          <div style={{ fontSize: 11, color: T.warn, fontFamily: T.sans, marginTop: 4 }}>
-            ↺ Narrator-Text wird mit dieser Korrektur neu generiert bevor die Audio-Produktion startet.
+            <textarea rows={2} value={kommentar} onChange={e => setKommentarFuer(stil, e.target.value)} disabled={isPreview}
+              placeholder="Kommentar / Korrektur zu diesem Text (optional)…"
+              style={{ ...fieldInput, fontSize: 13, resize: 'vertical' }} />
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: 4 }}>
+              {kommentar.trim() ? (
+                <span style={{ fontSize: 11, color: T.warn, fontFamily: T.sans }}>
+                  ↺ Dieser Text wird mit der Korrektur neu generiert bevor die Audio-Produktion startet.
+                </span>
+              ) : <span />}
+              {kommentar.trim() && (
+                <button onClick={() => kopiereAufAlle(stil)} disabled={isPreview}
+                  style={{ fontFamily: T.sans, fontSize: 11, padding: '3px 8px', borderRadius: 6, border: `1px solid ${T.border}`, cursor: isPreview ? 'not-allowed' : 'pointer', background: 'transparent', color: T.muted, whiteSpace: 'nowrap' }}>
+                  → auf alle {alleStile.length} Stile kopieren
+                </button>
+              )}
+            </div>
           </div>
-        )}
-      </div>
+        );
+      })}
 
       <button onClick={freigeben} disabled={saving || bereitsEntschieden || isPreview}
         style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || bereitsEntschieden || isPreview) ? 'not-allowed' : 'pointer', background: (bereitsEntschieden || isPreview) ? T.surfaceAlt : T.accent, color: (bereitsEntschieden || isPreview) ? T.mutedSoft : '#fff' }}>
@@ -2460,9 +2493,64 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
   );
 }
 
+// Read-only-Ansicht eines vergangenen Tages aus dem Archiv — zeigt alle gespeicherten
+// Stil-Texte + damaligen Kommentar + welcher Stil Prio war, ohne etwas editierbar zu machen.
+function Hitl1HistorieViewer({ etappe, onClose }) {
+  const varianten = React.useMemo(() => {
+    try { return JSON.parse(etappe.reel_varianten || '[]'); } catch { return []; }
+  }, [etappe.reel_varianten]);
+  const entschieden = !!etappe.hitl1_entschieden_um;
+
+  return (
+    <div style={{ maxWidth: 680, background: T.surface, borderRadius: 12, border: `1px solid ${T.border}`, padding: 24, marginBottom: 20 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
+        <div>
+          <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: 0, color: T.ink }}>
+            Archiv — Tag {etappe.etappen_nr} ({fmtDatumDE(etappe.datum)})
+          </h2>
+          <span style={{ fontSize: 12, color: entschieden ? T.ok : T.muted, fontFamily: T.mono }}>
+            {entschieden ? '✓ Damals entschieden' : '– Kein HITL #1 nötig gewesen'}
+          </span>
+        </div>
+        <button onClick={onClose} style={{ fontFamily: T.sans, fontSize: 12, padding: '4px 10px', borderRadius: 6, border: `1px solid ${T.border}`, cursor: 'pointer', background: 'transparent', color: T.muted }}>
+          Schließen ✕
+        </button>
+      </div>
+
+      {varianten.length === 0 ? (
+        <div style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, fontStyle: 'italic' }}>Keine Varianten-Texte gespeichert.</div>
+      ) : varianten.map(v => (
+        <div key={v.stil} style={{ border: `1.5px solid ${etappe.hitl_prio_stil === v.stil ? T.accent : T.border}`, borderRadius: 8, padding: 14, marginBottom: 14 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+            <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.ink }}>{v.stil}</span>
+            {etappe.hitl_prio_stil === v.stil && (
+              <span style={{ fontFamily: T.sans, fontSize: 11, fontWeight: 700, color: T.accentInk }}>★ war Prio</span>
+            )}
+          </div>
+          {v.erzaehler_lang ? (
+            <div style={{ fontFamily: T.sans, fontSize: 13, lineHeight: 1.55, color: T.ink, whiteSpace: 'pre-wrap', background: T.accentSoft, borderRadius: 6, padding: '10px 12px' }}>
+              {v.erzaehler_lang}
+            </div>
+          ) : (
+            <div style={{ fontFamily: T.sans, fontSize: 13, color: T.muted, fontStyle: 'italic' }}>Kein Text gespeichert.</div>
+          )}
+          {v.kommentar && (
+            <div style={{ fontFamily: T.sans, fontSize: 12, color: T.warn, marginTop: 8 }}>💬 {v.kommentar}</div>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function TabHitl1() {
+  const mobile = useMobile();
   const [etappen, setEtappen] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
+  const [historie, setHistorie] = React.useState([]);
+  const [historieLaden, setHistorieLaden] = React.useState(true);
+  const [activeRoute, setActiveRoute] = React.useState(null);
+  const [ausgewaehlt, setAusgewaehlt] = React.useState(null);
 
   async function laden() {
     setLoading(true);
@@ -2470,30 +2558,79 @@ function TabHitl1() {
     setEtappen(rows);
     setLoading(false);
   }
-
-  React.useEffect(() => { laden(); }, []);
-
-  if (loading) return <div style={{ padding: 24, fontFamily: T.sans, color: T.muted, fontSize: 14 }}>Lade…</div>;
-  if (!etappen.length) {
-    return (
-      <div>
-        <div style={{ padding: '10px 16px', marginBottom: 16, background: T.surfaceAlt, border: `1px solid ${T.border}`,
-          borderRadius: 8, fontSize: 13, color: T.muted, fontFamily: T.sans }}>
-          Keine offenen Etappen — Vorschau:
-        </div>
-        <Hitl1Panel etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', startort: '', zielort: '',
-          reel_varianten: JSON.stringify([{ stil: 'ki_narrator', erzaehler_lang: '' }]),
-          hitl_prio_stil: null, hitl1_entschieden_um: null }}
-          onFreigegeben={laden} />
-      </div>
-    );
+  async function ladeHistorie() {
+    setHistorieLaden(true);
+    const rows = await fetchEtappenHistorie();
+    setHistorie(rows);
+    setHistorieLaden(false);
   }
 
-  return (
+  React.useEffect(() => { laden(); ladeHistorie(); }, []);
+
+  const routen = React.useMemo(() => {
+    const m = new Map();
+    historie.forEach(e => { const k = e.route?.kuerzel; if (k) m.set(k, e.route); });
+    return Array.from(m.values()).sort((a, b) => (a.kuerzel || '').localeCompare(b.kuerzel || ''));
+  }, [historie]);
+  const gefiltert = activeRoute ? historie.filter(e => e.route?.kuerzel === activeRoute) : historie;
+
+  function onFreigegeben() { laden(); ladeHistorie(); }
+
+  const hauptinhalt = loading ? (
+    <div style={{ padding: 24, fontFamily: T.sans, color: T.muted, fontSize: 14 }}>Lade…</div>
+  ) : (
     <div>
-      {etappen.map(e => (
-        <Hitl1Panel key={e.id} etappe={e} onFreigegeben={laden} />
-      ))}
+      {!etappen.length ? (
+        <React.Fragment>
+          <div style={{ padding: '10px 16px', marginBottom: 16, background: T.surfaceAlt, border: `1px solid ${T.border}`,
+            borderRadius: 8, fontSize: 13, color: T.muted, fontFamily: T.sans }}>
+            Keine offenen Etappen — Vorschau:
+          </div>
+          <Hitl1Panel etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', startort: '', zielort: '',
+            reel_varianten: JSON.stringify([{ stil: 'ki_narrator', erzaehler_lang: '' }]),
+            hitl_prio_stil: null, hitl1_entschieden_um: null }}
+            onFreigegeben={onFreigegeben} />
+        </React.Fragment>
+      ) : (
+        etappen.map(e => (
+          <Hitl1Panel key={e.id} etappe={e} onFreigegeben={onFreigegeben} />
+        ))
+      )}
+      {ausgewaehlt && (
+        <Hitl1HistorieViewer etappe={ausgewaehlt} onClose={() => setAusgewaehlt(null)} />
+      )}
+    </div>
+  );
+
+  const sidebar = (
+    <aside style={{ background: T.surfaceAlt, padding: 18, borderRadius: 12, border: `1px solid ${T.border}` }}>
+      <div style={{ fontFamily: T.serif, fontSize: 16, fontWeight: 400, color: T.ink, marginBottom: 12 }}>Archiv</div>
+      <div style={{ display: 'flex', flexWrap: 'wrap', gap: 4, marginBottom: 14 }}>
+        <span className={`sk-chip ${activeRoute === null ? 'active' : ''}`} onClick={() => setActiveRoute(null)}>Alle</span>
+        {routen.map(r => (
+          <span key={r.kuerzel} className={`sk-chip ${activeRoute === r.kuerzel ? 'active' : ''}`} onClick={() => setActiveRoute(r.kuerzel)}>{r.kuerzel}</span>
+        ))}
+      </div>
+      {historieLaden && <div style={{ fontSize: 13, color: T.muted, fontFamily: T.sans }}>Lade…</div>}
+      {!historieLaden && gefiltert.length === 0 && (
+        <div style={{ fontSize: 13, color: T.muted, fontFamily: T.sans, lineHeight: 1.4 }}>
+          Noch keine Tage mit Narrator-Texten.
+        </div>
+      )}
+      <div style={{ maxHeight: mobile ? 'none' : 'calc(100vh - 260px)', overflowY: 'auto', marginRight: mobile ? 0 : -6, paddingRight: mobile ? 0 : 6 }}>
+        {gefiltert.map(e => (
+          <MonologListeItem key={e.id} e={e} aktiv={ausgewaehlt?.id === e.id} hideKuerzel={activeRoute !== null} onPick={setAusgewaehlt} />
+        ))}
+      </div>
+    </aside>
+  );
+
+  return mobile ? (
+    <div>{hauptinhalt}{sidebar}</div>
+  ) : (
+    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 20, alignItems: 'start' }}>
+      {hauptinhalt}
+      {sidebar}
     </div>
   );
 }
