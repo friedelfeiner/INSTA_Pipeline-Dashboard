@@ -2628,9 +2628,9 @@ function TabHitl1() {
   return mobile ? (
     <div>{hauptinhalt}{sidebar}</div>
   ) : (
-    <div style={{ display: 'grid', gridTemplateColumns: 'minmax(0, 1fr) 320px', gap: 20, alignItems: 'start' }}>
-      {hauptinhalt}
-      {sidebar}
+    <div style={{ display: 'flex', gap: 20, alignItems: 'flex-start' }}>
+      <div style={{ maxWidth: 680, minWidth: 0 }}>{hauptinhalt}</div>
+      <div style={{ width: 320, flexShrink: 0 }}>{sidebar}</div>
     </div>
   );
 }
