@@ -143,6 +143,21 @@ async function fetchRouten() {
   ]));
 }
 
+// Reel-Performance: Snapshots aus reel_metrics samt Etappe (tools/insights_poller.py
+// füllt die Tabelle). Die Etappe kommt per Embed mit — ohne sie wäre eine Zeile nur
+// eine media_id.
+async function fetchReelMetrics() {
+  const cols = [
+    'etappe_id', 'variante', 'platform', 'horizon', 'posted_at',
+    'views', 'reach', 'likes', 'comments', 'saves', 'shares', 'watch_time_avg_sec',
+    'etappe:etappen(tag_nr,datum,startort,zielort,run,route_id)',
+  ].join(',');
+  const url = `${SUPABASE_URL}/rest/v1/reel_metrics?select=${cols}&order=posted_at.desc&limit=2000`;
+  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+  return res.json();
+}
+
 async function sendMonolog(datum, text, nurText) {
   const r = await fetch(FUNCTIONS_URL + '/monolog-grundgeruest', {
     method: 'POST',
@@ -2774,11 +2789,178 @@ function TabHitl2() {
   );
 }
 
+// ─── Tab: Reels (Reichweite der veröffentlichten Varianten) ───────────────────
+// Nicht zu verwechseln mit dem Performance-Tab: der misst die Laufzeit der
+// Pipeline, dieser die Wirkung dessen, was sie ausgeliefert hat.
+
+// Je Reel zählt der jüngste Snapshot — '24h' und 'final' nebeneinander zu mitteln
+// würde Reels unterschiedlichen Alters gegeneinander verrechnen.
+const HORIZON_RANG = { '24h': 1, '72h': 2, '7d': 3, 'final': 4 };
+
+function juengsteSnapshots(rows) {
+  const beste = new Map();
+  for (const r of rows) {
+    const key = `${r.etappe_id}|${r.variante}|${r.platform}`;
+    const alt = beste.get(key);
+    if (!alt || (HORIZON_RANG[r.horizon] || 0) > (HORIZON_RANG[alt.horizon] || 0)) beste.set(key, r);
+  }
+  return [...beste.values()];
+}
+
+const mittel = (arr, feld) => {
+  const werte = arr.map(a => a[feld]).filter(v => v !== null && v !== undefined);
+  return werte.length ? werte.reduce((s, v) => s + v, 0) / werte.length : null;
+};
+
+// Ein Balken zeigt Größe, nicht Identität — deshalb durchgängig der Akzent-Ton
+// und der Name als Text daneben. Fünf Stil-Farben würden Zugehörigkeit behaupten,
+// wo nur "mehr oder weniger Views" gemeint ist.
+function ReelBar({ label, sub, value, maxValue, detail }) {
+  const pct = maxValue > 0 ? Math.min(100, (value / maxValue) * 100) : 0;
+  return (
+    <div title={detail || ''}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 6, gap: 10 }}>
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 500,
+          overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{label}</span>
+        <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, flexShrink: 0 }}>{sub}</span>
+      </div>
+      <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
+        <div style={{ height: '100%', width: `${pct}%`, background: T.accent, borderRadius: 4 }} />
+      </div>
+    </div>
+  );
+}
+
+function TabReels() {
+  const mobile = useMobile();
+  const [rows, setRows] = useState(null);
+  const [fehler, setFehler] = useState(null);
+  const [tage, setTage] = useState(30);
+
+  React.useEffect(() => {
+    fetchReelMetrics().then(setRows).catch(e => setFehler(e.message));
+  }, []);
+
+  if (fehler) return <Panel><div style={{ color: T.err, fontSize: 13 }}>Fehler beim Laden: {fehler}</div></Panel>;
+  if (!rows) return <Panel><div style={{ color: T.muted, fontSize: 13 }}>Lade Reel-Zahlen…</div></Panel>;
+
+  const grenze = Date.now() - tage * 864e5;
+  const aktuell = juengsteSnapshots(
+    rows.filter(r => r.etappe && (tage === 0 || new Date(r.posted_at).getTime() >= grenze))
+  );
+  const ig = aktuell.filter(r => r.platform === 'instagram');
+
+  // Schnitt je Stil
+  const stile = {};
+  for (const r of ig) (stile[r.variante || '?'] ||= []).push(r);
+  const stilListe = Object.entries(stile)
+    .map(([stil, gruppe]) => ({
+      stil, n: gruppe.length,
+      views: mittel(gruppe, 'views') || 0,
+      watch: mittel(gruppe, 'watch_time_avg_sec'),
+      reach: mittel(gruppe, 'reach') || 0,
+    }))
+    .sort((a, b) => b.views - a.views);
+  const maxStilViews = Math.max(...stilListe.map(s => s.views), 1);
+
+  // Etappen, neueste zuerst
+  const etappen = {};
+  for (const r of aktuell) (etappen[r.etappe_id] ||= []).push(r);
+  const etappenListe = Object.values(etappen).sort((a, b) =>
+    (b[0].etappe.datum || '').localeCompare(a[0].etappe.datum || ''));
+
+  const gesamtViews = mittel(ig, 'views');
+  const gesamtWatch = mittel(ig, 'watch_time_avg_sec');
+  const belastbar = stilListe.filter(s => s.n >= 5);
+
+  const ZEITRAEUME = [[7, '7 Tage'], [30, '30 Tage'], [90, '90 Tage'], [0, 'Alles']];
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        {ZEITRAEUME.map(([t, label]) => (
+          <button key={t} onClick={() => setTage(t)}
+            className={`sk-chip${tage === t ? ' active' : ''}`}>{label}</button>
+        ))}
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 14 }}>
+        <KPI icon={IActivity} label="Reels erfasst" value={aktuell.length || '–'}
+          sub={`${ig.length} auf Instagram`} />
+        <KPI icon={ITrendUp} label="Ø Views" value={gesamtViews ? Math.round(gesamtViews) : '–'}
+          sub={tage ? `letzte ${tage} Tage` : 'gesamter Zeitraum'} />
+        <KPI icon={IClock} label="Ø Watch-Time" value={gesamtWatch ? `${gesamtWatch.toFixed(1)}s` : '–'}
+          sub="pro Aufruf" />
+        <KPI icon={ISparkles} label="Vorn" value={belastbar.length ? belastbar[0].stil : '–'}
+          sub={belastbar.length ? `${Math.round(belastbar[0].views)} Ø Views · n=${belastbar[0].n}`
+                                : 'noch keine Stichprobe ab n=5'} />
+      </div>
+
+      <Panel>
+        <PanelHeader icon={IGauge} label="Schnitt je Stil" serif="Nur Instagram"
+          right={<div style={{ textAlign: 'right' }}>
+            <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>{ig.length}</div>
+            <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>Reels in der Wertung</div>
+          </div>} />
+        {stilListe.length === 0
+          ? <div style={{ color: T.muted, fontSize: 13 }}>Keine Snapshots in diesem Zeitraum.</div>
+          : <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
+              {stilListe.map(s => (
+                <ReelBar key={s.stil} label={s.stil} value={s.views} maxValue={maxStilViews}
+                  sub={`${Math.round(s.views)} Views · n=${s.n}${s.watch ? ` · ${s.watch.toFixed(1)}s` : ''}`}
+                  detail={`Ø Reach ${Math.round(s.reach)} · Ø Watch-Time ${s.watch ? s.watch.toFixed(1) + 's' : '–'}`} />
+              ))}
+            </div>}
+        <div style={{ marginTop: 14, fontSize: 11, color: T.mutedSoft, fontFamily: T.sans }}>
+          Reihenfolge ist erst ab n≈5 pro Stil ein Hinweis — darunter Rauschen.
+        </div>
+      </Panel>
+
+      <Panel>
+        <PanelHeader icon={IImage} label="Varianten je Etappe" serif="Der eigentliche A/B-Vergleich" />
+        {etappenListe.length === 0
+          ? <div style={{ color: T.muted, fontSize: 13 }}>Keine Snapshots in diesem Zeitraum.</div>
+          : <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
+              {etappenListe.map(gruppe => {
+                const e = gruppe[0].etappe;
+                const maxViews = Math.max(...gruppe.map(r => r.views || 0), 1);
+                const strecke = [e.startort, e.zielort].filter(Boolean).join(' – ');
+                return (
+                  <div key={gruppe[0].etappe_id}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
+                      <span style={{ fontFamily: T.serif, fontSize: 17, color: T.ink }}>Tag {e.tag_nr}</span>
+                      {e.run > 1 && (
+                        <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, padding: '2px 6px',
+                          borderRadius: 4, background: T.accentSoft, color: T.accentInk }}>RUN {e.run}</span>
+                      )}
+                      <span style={{ fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>{e.datum}</span>
+                      {strecke && <span style={{ fontSize: 12, color: T.muted }}>{strecke}</span>}
+                    </div>
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
+                      {gruppe.sort((a, b) => (b.views || 0) - (a.views || 0)).map(r => (
+                        <ReelBar key={`${r.variante}|${r.platform}`}
+                          label={`${r.variante || '?'}${r.platform !== 'instagram' ? ` · ${r.platform}` : ''}`}
+                          value={r.views || 0} maxValue={maxViews}
+                          sub={`${r.views ?? '–'} Views${r.watch_time_avg_sec ? ` · ${r.watch_time_avg_sec.toFixed(1)}s` : ''}`}
+                          detail={`Reach ${r.reach ?? '–'} · Saves ${r.saves ?? '–'} · Likes ${r.likes ?? '–'} · `
+                                + `Shares ${r.shares ?? '–'} · Stand ${r.horizon}`} />
+                      ))}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>}
+      </Panel>
+    </div>
+  );
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 const ARCHIV_TABS = [
   { id: 'uebersicht',  label: 'Übersicht',   Icon: IDash,      Content: TabUebersicht },
   { id: 'kosten',      label: 'Kosten',      Icon: ICoins,     Content: TabKosten },
   { id: 'stylereview', label: 'Style',        Icon: ISparkles,  Content: TabStyleReview },
+  { id: 'reels',       label: 'Reels',       Icon: ITrendUp,   Content: TabReels },
   { id: 'performance', label: 'Performance', Icon: IGauge,     Content: TabPerformance },
   { id: 'reliability', label: 'Reliability', Icon: IShield,    Content: TabReliability },
 ];
