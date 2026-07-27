@@ -159,13 +159,28 @@ async function fetchReelMetrics() {
   return res.json();
 }
 
+// Antwortet die Edge Function mit 500 und ohne JSON-Body, warf r.json() früher mitten in den
+// Aufrufer hinein — setSaving(false) lief nie, die Buttons blieben bis zum Reload tot. Jetzt
+// kommt in jedem Fall ein Objekt zurück, das die Aufrufer über res.ok/res.error auswerten.
 async function sendMonolog(datum, text, nurText) {
-  const r = await fetch(FUNCTIONS_URL + '/monolog-grundgeruest', {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ datum, monolog_text: text, nur_text: !!nurText }),
-  });
-  return r.json();
+  let r;
+  try {
+    r = await fetch(FUNCTIONS_URL + '/monolog-grundgeruest', {
+      method: 'POST',
+      headers: { 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ datum, monolog_text: text, nur_text: !!nurText }),
+    });
+  } catch (err) {
+    return { ok: false, error: 'Netzwerkfehler: ' + err.message };
+  }
+  const roh = await r.text();
+  let daten = null;
+  try { daten = roh ? JSON.parse(roh) : null; } catch { /* kein JSON — unten behandelt */ }
+  if (!r.ok) {
+    return { ok: false, error: daten?.error || `HTTP ${r.status}${roh ? ': ' + roh.slice(0, 200) : ''}` };
+  }
+  if (!daten) return { ok: false, error: 'Ungültige Antwort der Edge Function' };
+  return daten;
 }
 
 // Vorhandenen Monolog für ein Datum laden (run=1, wie die Edge Function ihn ablegt).
@@ -1655,23 +1670,29 @@ function TabStyleReview({ data, selectedEtappe }) {
 
   async function handleRate(r) {
     if (!curE || saving) return;
+    // Optimistisch setzen, bei Fehler unten wieder zurückrollen — sonst zeigt der Button eine
+    // Bewertung an, die nie in der DB gelandet ist (genau der Fall, der bis 27.07. still lief).
+    const vorher = rating;
     setRating(r.value); setSaving(true); setSaveMsg(null);
     const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' };
     try {
-      await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}`, {
+      const res = await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}`, {
         method: 'PATCH', headers: h,
         body: JSON.stringify({ stil_bewertung: r.value, stil_notiz: null }),
       });
+      if (!res.ok) throw new Error(`HTTP ${res.status} beim Speichern der Bewertung`);
       const tagesstil = fotos.length > 0 ? fotos[0].tagesstil : null;
       if (tagesstil) {
-        await fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}`, {
+        const resStil = await fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}`, {
           method: 'PATCH', headers: h, body: JSON.stringify(r.stilUpdate),
         });
+        if (!resStil.ok) throw new Error(`HTTP ${resStil.status} beim Speichern des Stils`);
         setStilInfo(prev => prev ? { ...prev, ...r.stilUpdate } : prev);
       }
       setSaveMsg({ text: `✓ ${r.emoji} ${r.label}`, type: 'ok' });
       setTimeout(() => setSaveMsg(null), 3000);
     } catch (err) {
+      setRating(vorher);
       setSaveMsg({ text: `Fehler: ${err.message}`, type: 'error' });
     } finally { setSaving(false); }
   }
@@ -2180,54 +2201,60 @@ function MonologPanel() {
   async function speichern() {
     if (!text.trim()) return;
     setSaving(true); setStatus('…');
-    const res = await sendMonolog(datum, text, true);
-    setSaving(false);
-    setStatus(res.ok ? '✓ Gespeichert' : 'Fehler: ' + (res.error || 'unbekannt'));
-    if (res.ok) {
-      // Liste lokal aktualisieren, damit der neue Eintrag sofort erscheint.
-      setListe(prev => {
-        const idx = prev.findIndex(p => p.datum === datum);
-        const eintrag = {
-          id: prev[idx]?.id || `local-${datum}`,
-          datum, etappen_nr: null, tag_nr: null,
-          tagesueberschrift: prev[idx]?.tagesueberschrift || null,
-          tages_monolog: text.trim(),
-          route: prev[idx]?.route || null,
-        };
-        return idx >= 0
-          ? [eintrag, ...prev.filter((_, i) => i !== idx)]
-          : [eintrag, ...prev];
-      });
-    }
+    try {
+      const res = await sendMonolog(datum, text, true);
+      setStatus(res.ok ? '✓ Gespeichert' : 'Fehler: ' + (res.error || 'unbekannt'));
+      if (res.ok) {
+        // Liste lokal aktualisieren, damit der neue Eintrag sofort erscheint.
+        setListe(prev => {
+          const idx = prev.findIndex(p => p.datum === datum);
+          const eintrag = {
+            id: prev[idx]?.id || `local-${datum}`,
+            datum, etappen_nr: null, tag_nr: null,
+            tagesueberschrift: prev[idx]?.tagesueberschrift || null,
+            tages_monolog: text.trim(),
+            route: prev[idx]?.route || null,
+          };
+          return idx >= 0
+            ? [eintrag, ...prev.filter((_, i) => i !== idx)]
+            : [eintrag, ...prev];
+        });
+      }
+    } catch (err) {
+      setStatus('Fehler: ' + err.message);
+    } finally { setSaving(false); }
   }
 
   // Säubern + Speichern in einem Schritt — der geputzte Text geht direkt in die DB.
   async function saeubern() {
     if (!text.trim()) return;
     setSaving(true); setStatus('… säubere & speichere');
-    const res = await sendMonolog(datum, text, false);
-    if (!res.gesaeubert) { setSaving(false); setStatus('Fehler: ' + (res.error || 'unbekannt')); return; }
-    const save = await sendMonolog(datum, res.gesaeubert, true);
-    setSaving(false);
-    if (save.ok) {
-      setText(res.gesaeubert);
-      setStatus('✓ Gespeichert');
-      setListe(prev => {
-        const idx = prev.findIndex(p => p.datum === datum);
-        const eintrag = {
-          id: prev[idx]?.id || `local-${datum}`,
-          datum, etappen_nr: null, tag_nr: null,
-          tagesueberschrift: prev[idx]?.tagesueberschrift || null,
-          tages_monolog: res.gesaeubert.trim(),
-          route: prev[idx]?.route || null,
-        };
-        return idx >= 0
-          ? [eintrag, ...prev.filter((_, i) => i !== idx)]
-          : [eintrag, ...prev];
-      });
-    } else {
-      setStatus('Fehler beim Speichern: ' + (save.error || 'unbekannt'));
-    }
+    try {
+      const res = await sendMonolog(datum, text, false);
+      if (!res.gesaeubert) { setStatus('Fehler: ' + (res.error || 'unbekannt')); return; }
+      const save = await sendMonolog(datum, res.gesaeubert, true);
+      if (save.ok) {
+        setText(res.gesaeubert);
+        setStatus('✓ Gespeichert');
+        setListe(prev => {
+          const idx = prev.findIndex(p => p.datum === datum);
+          const eintrag = {
+            id: prev[idx]?.id || `local-${datum}`,
+            datum, etappen_nr: null, tag_nr: null,
+            tagesueberschrift: prev[idx]?.tagesueberschrift || null,
+            tages_monolog: res.gesaeubert.trim(),
+            route: prev[idx]?.route || null,
+          };
+          return idx >= 0
+            ? [eintrag, ...prev.filter((_, i) => i !== idx)]
+            : [eintrag, ...prev];
+        });
+      } else {
+        setStatus('Fehler beim Speichern: ' + (save.error || 'unbekannt'));
+      }
+    } catch (err) {
+      setStatus('Fehler: ' + err.message);
+    } finally { setSaving(false); }
   }
 
   function pick(e) {
@@ -2243,23 +2270,26 @@ function MonologPanel() {
   async function freigeben() {
     if (!text.trim()) return;
     setSaving(true); setStatus('… freigeben');
-    // 1. Sauber speichern — Edge-Function legt die Etappe an / aktualisiert tages_monolog
-    //    und liefert die etappe_id zurück.
-    const save = await sendMonolog(datum, text, true);
-    if (!save.ok || !save.etappe_id) { setSaving(false); setStatus('Fehler beim Speichern: ' + (save.error || 'unbekannt')); return; }
-    // 2. Als final + freigegeben markieren. return=representation + Status-Check, damit ein
-    //    fehlgeschlagener PATCH nicht mehr still verschluckt wird.
-    const h = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=representation' };
-    const patch = await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${save.etappe_id}`, {
-      method: 'PATCH', headers: h,
-      body: JSON.stringify({
-        monolog_final: text.trim(),
-        hitl1_entschieden_um: new Date().toISOString(),
-      }),
-    });
-    if (!patch.ok) { setSaving(false); setStatus('Fehler beim Freigeben: HTTP ' + patch.status); return; }
-    setSaving(false);
-    setStatus('✓ Freigegeben — Narrator nimmt den Text, HITL #1 entfällt');
+    try {
+      // 1. Sauber speichern — Edge-Function legt die Etappe an / aktualisiert tages_monolog
+      //    und liefert die etappe_id zurück.
+      const save = await sendMonolog(datum, text, true);
+      if (!save.ok || !save.etappe_id) { setStatus('Fehler beim Speichern: ' + (save.error || 'unbekannt')); return; }
+      // 2. Als final + freigegeben markieren. return=representation + Status-Check, damit ein
+      //    fehlgeschlagener PATCH nicht mehr still verschluckt wird.
+      const h = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=representation' };
+      const patch = await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${save.etappe_id}`, {
+        method: 'PATCH', headers: h,
+        body: JSON.stringify({
+          monolog_final: text.trim(),
+          hitl1_entschieden_um: new Date().toISOString(),
+        }),
+      });
+      if (!patch.ok) { setStatus('Fehler beim Freigeben: HTTP ' + patch.status); return; }
+      setStatus('✓ Freigegeben — Narrator nimmt den Text, HITL #1 entfällt');
+    } catch (err) {
+      setStatus('Fehler beim Freigeben: ' + err.message);
+    } finally { setSaving(false); }
   }
 
   // Wege aus den geladenen Monologen ableiten — nur die mit Inhalt tauchen als Chip auf.
@@ -2378,6 +2408,7 @@ const HITL1_STILE = ['ki_narrator', 'impact', 'selfie_first', 'rap'];
 
 function Hitl1Panel({ etappe, onFreigegeben }) {
   const [saving, setSaving] = React.useState(false);
+  const [fehler, setFehler] = React.useState(null);
   const [startort, setStartort] = React.useState(etappe.startort || '');
   const [zielort, setZielort] = React.useState(etappe.zielort || '');
 
@@ -2414,7 +2445,7 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
 
   async function freigeben() {
     if (isPreview) return;
-    setSaving(true);
+    setSaving(true); setFehler(null);
     const patchVarianten = (varianten.length > 0 ? varianten : HITL1_STILE.map(stil => ({ stil }))).map(v => ({
       ...v,
       kommentar: (kommentare[v.stil] || '').trim() || null,
@@ -2426,9 +2457,14 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
       startort: startort.trim() || null,
       zielort: zielort.trim() || null,
     };
-    await patchEtappe(etappe.id, patch);
-    setSaving(false);
-    onFreigegeben?.();
+    try {
+      const res = await patchEtappe(etappe.id, patch);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onFreigegeben?.();
+    } catch (err) {
+      // Ohne diese Meldung blieb der Eintrag bei einem 401/Netzwerkfehler einfach stumm stehen.
+      setFehler(`Freigabe fehlgeschlagen: ${err.message}`);
+    } finally { setSaving(false); }
   }
 
   const bereitsEntschieden = !!etappe.hitl1_entschieden_um;
@@ -2505,6 +2541,11 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
         style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || bereitsEntschieden || isPreview) ? 'not-allowed' : 'pointer', background: (bereitsEntschieden || isPreview) ? T.surfaceAlt : T.accent, color: (bereitsEntschieden || isPreview) ? T.mutedSoft : '#fff' }}>
         {bereitsEntschieden ? '✓ Freigegeben' : saving ? '…' : 'Freigeben →'}
       </button>
+      {fehler && (
+        <div style={{ marginTop: 10, background: T.errSoft, border: `1px solid ${T.err}`, borderRadius: 8, padding: '10px 14px', fontSize: 13, fontFamily: T.sans, color: T.err, fontWeight: 600 }}>
+          ❌ {fehler}
+        </div>
+      )}
     </div>
   );
 }
@@ -2664,6 +2705,7 @@ function Hitl2Veto({ etappe, onVeto }) {
   const ziel = etappe.post_geplant_um ? new Date(etappe.post_geplant_um) : null;
   const [now, setNow] = React.useState(new Date());
   const [saving, setSaving] = React.useState(false);
+  const [fehler, setFehler] = React.useState(null);
 
   React.useEffect(() => {
     const iv = setInterval(() => setNow(new Date()), 10000);
@@ -2680,21 +2722,22 @@ function Hitl2Veto({ etappe, onVeto }) {
 
   const isPreview = etappe.id === '__preview__';
 
-  async function setzeVeto() {
+  // Beide Pfade schreiben live auf einen Publish-Entscheid — ein verschluckter Fehler hieße hier,
+  // dass ein Veto nur in der UI passiert ist und das Reel trotzdem rausgeht.
+  async function patcheUndMelde(felder, was) {
     if (isPreview) return;
-    setSaving(true);
-    await patchEtappe(etappe.id, { veto: true });
-    setSaving(false);
-    onVeto?.();
+    setSaving(true); setFehler(null);
+    try {
+      const res = await patchEtappe(etappe.id, felder);
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      onVeto?.();
+    } catch (err) {
+      setFehler(`${was} fehlgeschlagen: ${err.message}`);
+    } finally { setSaving(false); }
   }
 
-  async function setzeFreigabe() {
-    if (isPreview) return;
-    setSaving(true);
-    await patchEtappe(etappe.id, { freigabe: true });
-    setSaving(false);
-    onVeto?.();
-  }
+  const setzeVeto     = () => patcheUndMelde({ veto: true }, 'Veto');
+  const setzeFreigabe = () => patcheUndMelde({ freigabe: true }, 'Freigabe');
 
   return (
     <div style={{ maxWidth: 540, background: T.surface, borderRadius: 12, border: `2px solid ${offen ? T.accent : T.border}`, padding: 24, marginBottom: 20, opacity: isPreview ? 0.6 : 1 }}>
@@ -2743,6 +2786,11 @@ function Hitl2Veto({ etappe, onVeto }) {
               {saving ? '…' : '⛔ Veto — Prio verwerfen'}
             </button>
           </div>
+          {fehler && (
+            <div style={{ marginTop: 10, background: T.errSoft, border: `1px solid ${T.err}`, borderRadius: 8, padding: '10px 14px', fontSize: 13, fontFamily: T.sans, color: T.err, fontWeight: 600 }}>
+              ❌ {fehler} — nichts gespeichert, bitte erneut versuchen.
+            </div>
+          )}
         </div>
       ) : (
         <div style={{ fontSize: 13, fontFamily: T.sans, color: T.muted }}>
