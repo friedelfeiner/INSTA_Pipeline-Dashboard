@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width,initial-scale=1" />
 <title>INSTA Pipeline – Floppy Trail</title>
 <meta name="robots" content="noindex, nofollow" />
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+<link rel="icon" type="image/png" sizes="32x32" href="icons/favicon-32.png">
+<link rel="manifest" href="manifest.webmanifest">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Floppy Trail">
+<meta name="theme-color" content="#7C3AED">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Geist:wght@300;400;500;600;700&family=Geist+Mono:wght@400;500;600&family=Instrument+Serif:ital@0;1&display=swap" rel="stylesheet">
@@ -86,14 +94,48 @@ const T = {
 };
 
 // ─── Platform cost split ──────────────────────────────────────────────────────
-// WaveSpeed t2i Seedream ~$0.030/Bild × ~0.88 EUR/USD ≈ €0.0264/Bild
-// Alles andere in imagegen_eur → Atlas (hero_bild Nano Banana 2)
-// video_eur ist komplett Atlas
-const WAVESPEED_EUR_PER_T2I = 0.030 * 0.88;
+// Einheitspreise + Kurs kommen aus costs_data.json (tools/costs_report.py --json,
+// C1) — dieselbe Quelle, die der Ist-Kosten-Tab zeigt, damit Schätzwert und Beleg
+// nie mit unterschiedlichen Preisen rechnen. setKostenPreise() wird beim Laden von
+// costs_data.json aufgerufen; bis dahin bzw. falls das JSON fehlt, gelten die
+// eingebauten Fallback-Werte (Stand 23.07., siehe pipeline_telemetry.PREISE_USD).
+const KOSTEN_PREISE_FALLBACK = {
+  kurs: 0.8765,
+  preise: { t2i_bild: 0.067, flash_clip: 0.175, wan27_clip: 1.50, hero_bild: 0.075, tts: 0.11, tts_minimax: 0.17, suno_song: 0.06 },
+  anbieter: { t2i_bild: 'wavespeed', wan27_clip: 'wavespeed', flash_clip: 'atlas', hero_bild: 'atlas', tts: 'fal', tts_minimax: 'minimax', suno_song: 'sunoapi' },
+};
+let kostenPreise = KOSTEN_PREISE_FALLBACK;
+function setKostenPreise(meta) {
+  if (!meta?.preise_usd || !meta?.preise_anbieter) return;
+  kostenPreise = { kurs: meta.kurs_usd_eur || KOSTEN_PREISE_FALLBACK.kurs, preise: meta.preise_usd, anbieter: meta.preise_anbieter };
+}
+
+// C2a: mit unit_counts (ab 02.08. geschrieben) rechnet der Split exakt aus den
+// echten Stückzahlen. Ohne unit_counts (Altbestand) bleibt nur die Heuristik aus
+// t2i_count — sie kann wan27_clip (WaveSpeed) nicht von flash_clip (Atlas) trennen
+// und wird darum im Dashboard mit „≈" gekennzeichnet (precise: false, C2/C3).
 function platformCosts(e) {
-  const wavespeed = Math.round((e.t2i_count || 0) * WAVESPEED_EUR_PER_T2I * 10000) / 10000;
-  const atlas     = Math.max(0, Math.round(((e.cost_imagegen_eur || 0) - wavespeed + (e.cost_video_eur || 0)) * 10000) / 10000);
-  return { wavespeed, atlas };
+  const { kurs, preise, anbieter } = kostenPreise;
+  if (e.unit_counts) {
+    const split = { wavespeed: 0, atlas: 0 };
+    for (const [posten, n] of Object.entries(e.unit_counts)) {
+      const preis = preise[posten];
+      const ziel = anbieter[posten];
+      if (!preis || !ziel || !(n > 0) || !(ziel in split)) continue;
+      split[ziel] += n * preis * kurs;
+    }
+    return {
+      wavespeed: Math.round(split.wavespeed * 10000) / 10000,
+      atlas:     Math.round(split.atlas * 10000) / 10000,
+      precise: true,
+    };
+  }
+  const wavespeedEurProT2i = preise.t2i_bild * kurs;
+  const wavespeed = Math.round((e.t2i_count || 0) * wavespeedEurProT2i * 10000) / 10000;
+  const rest       = (e.cost_imagegen_eur || 0) - wavespeed + (e.cost_video_eur || 0);
+  const atlas      = Math.round(Math.max(0, rest) * 10000) / 10000;
+  const sonstiges  = Math.round(Math.min(0, rest) * -10000) / 10000; // C4: negativer Rest statt stillem Kappen
+  return { wavespeed, atlas, sonstiges, precise: false };
 }
 
 // ─── Supabase config ──────────────────────────────────────────────────────────
@@ -101,21 +143,40 @@ const SUPABASE_URL = 'https://rgwbmqlcxxrynufcmwqx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_F-ZIctvp3JyhpVGNXbMttw_9vc7tdtH';
 const FUNCTIONS_URL = SUPABASE_URL + '/functions/v1';
 
+// PostgREST liefert maximal 1000 Zeilen pro Anfrage (ein &limit=3000 wird
+// stillschweigend gekappt). Deshalb seitenweise über Range-Header holen.
+async function fetchAll(path, pageSize = 1000) {
+  const headers = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
+  const out = [];
+  for (let from = 0; ; from += pageSize) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      headers: { ...headers, Range: `${from}-${from + pageSize - 1}` },
+    });
+    if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
+    const page = await res.json();
+    out.push(...page);
+    if (page.length < pageSize) return out;
+  }
+}
+
 // ─── Data loading ─────────────────────────────────────────────────────────────
 async function fetchEtappen() {
   const cols = [
     'id','datum','tag_nr','etappen_nr','tagesueberschrift','erzaehl_stimmung',
-    'startort','zielort','pipeline_status','route_id',
+    'startort','zielort','pipeline_status','route_id','run',
     'run_at','cost_total_eur','cost_llm_eur','cost_imagegen_eur',
     'cost_video_eur','cost_tts_eur','duration_total_s','agent_timings_s',
     'retries','errors','photos_input','photos_selected','t2i_count','video_count','published_platforms',
+    'unit_counts','dauer_min','hoehenmeter_auf','hoehenmeter_ab','blog_url',
   ].join(',');
-  const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&order=datum.desc&limit=60`;
-  const res = await fetch(url, {
-    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` }
-  });
-  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
-  return res.json();
+  return fetchAll(`etappen?select=${cols}&order=datum.desc`);
+}
+
+// I1: Account-Basislinie (Follower/Reach/Views pro Tag) aus account_insights —
+// ein Snapshot pro Tag, tools/insights_poller.py füllt die Tabelle.
+async function fetchAccountInsights() {
+  const cols = ['tag', 'followers_count', 'reach', 'views', 'accounts_engaged', 'total_interactions'].join(',');
+  return fetchAll(`account_insights?select=${cols}&order=tag.desc`);
 }
 
 async function fetchLatestRun() {
@@ -150,13 +211,12 @@ async function fetchRouten() {
 async function fetchReelMetrics() {
   const cols = [
     'etappe_id', 'variante', 'platform', 'horizon', 'posted_at',
-    'views', 'reach', 'likes', 'comments', 'saves', 'shares', 'watch_time_avg_sec',
+    'views', 'reach', 'likes', 'comments', 'saves', 'shares',
+    'watch_time_avg_sec', 'watch_time_total_sec',
+    'dauer_s', 'retention_pct', 'slot',
     'etappe:etappen(tag_nr,datum,startort,zielort,run,route_id)',
   ].join(',');
-  const url = `${SUPABASE_URL}/rest/v1/reel_metrics?select=${cols}&order=posted_at.desc&limit=2000`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
-  if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
-  return res.json();
+  return fetchAll(`reel_metrics?select=${cols}&order=posted_at.desc`);
 }
 
 // Antwortet die Edge Function mit 500 und ohne JSON-Body, warf r.json() früher mitten in den
@@ -194,7 +254,7 @@ async function fetchMonolog(datum) {
 
 // Liste aller bereits eingesprochenen Monologe (neueste zuerst), inkl. Route via Embed.
 async function fetchMonologListe() {
-  const url = `${SUPABASE_URL}/rest/v1/etappen?select=id,datum,etappen_nr,tag_nr,tagesueberschrift,tages_monolog,route:routen(name,kuerzel)&tages_monolog=not.is.null&order=datum.desc&limit=30`;
+  const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=id,datum,etappen_nr,tag_nr,tagesueberschrift,tages_monolog,route:routen(name,kuerzel)&tages_monolog=not.is.null&order=datum.desc&limit=30`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY } });
   if (!res.ok) return [];
   return res.json();
@@ -231,6 +291,17 @@ function trendInfo(series) {
   return { dir: pct > 0 ? 'up' : 'down', val: `${pct > 0 ? '+' : ''}${pct}%`, pct };
 }
 
+// C6: 5 gleichmäßig verteilte Achsenbeschriftungen aus den echten Tag-Nummern der
+// gezeigten Trend-Punkte — ersetzt die hart codierte T1/T7/T14/T21/T28-Achse, die
+// nur für exakt 28 Runs ohne Lücken stimmte.
+function trendAxisTicks(labels) {
+  const n = (labels || []).length;
+  if (!n) return ['', '', '', '', ''];
+  if (n <= 5) return labels;
+  const idxs = [0, 1, 2, 3, 4].map(i => Math.round((i * (n - 1)) / 4));
+  return idxs.map(i => labels[i]);
+}
+
 function etappeName(e) {
   if (e.startort && e.zielort) return `${e.startort} → ${e.zielort}`;
   return e.tagesueberschrift || `Etappe ${e.tag_nr || e.etappen_nr || '?'}`;
@@ -254,6 +325,17 @@ function statusMap(s) {
   return 'partial';
 }
 
+// E4: "alle resolved" ist nur wahr, wenn errors[].resolved es für jeden Eintrag
+// sagt — vorher stand der Text pauschal da, sobald es überhaupt Fehler gab, egal
+// ob die Telemetrie sie längst als behoben markiert hatte (add_error(resolved=…)).
+function fehlerSub(errors) {
+  const list = errors || [];
+  if (!list.length) return 'keine Fehler';
+  const unresolved = list.filter(e => !e.resolved).length;
+  if (unresolved > 0) return `${unresolved} Fehler · bitte prüfen`;
+  return `${list.length} Fehler · alle resolved`;
+}
+
 function transformData(rows, routeMap = {}) {
   if (!rows || !rows.length) return null;
 
@@ -267,49 +349,74 @@ function transformData(rows, routeMap = {}) {
     : valid[0];
   const chronological = [...valid].reverse();
 
-  const etappenList = chronological.map(e => ({
-    id:        e.id,
-    n:         e.tag_nr || 0,
-    name:      etappeName(e),
-    datum:     e.datum || '',
-    route:     e.route_id || '',
-    kuerzel:   routeMap[e.route_id]?.kuerzel || '',
-    routeName: routeMap[e.route_id]?.name || '',
-    stimmung:  e.erzaehl_stimmung || '',
-    headline: e.tagesueberschrift || '',
-    status:   statusMap(e.pipeline_status),
-    run_at:   e.run_at || null,
-    cost:     e.cost_total_eur    || 0,
-    llm:      e.cost_llm_eur      || 0,
-    imagegen: e.cost_imagegen_eur || 0,
-    video:    e.cost_video_eur    || 0,
-    tts:      e.cost_tts_eur      || 0,
-    wavespeed: platformCosts(e).wavespeed,
-    atlas:     platformCosts(e).atlas,
-    dur:      e.duration_total_s  || 0,
-    timings:  e.agent_timings_s   || {},
-    photos_input:    e.photos_input    || 0,
-    photos_selected: e.photos_selected || 0,
-    t2i:      e.t2i_count   || 0,
-    clips:    e.video_count || 0,
-    retries:  Object.values(e.retries || {}).reduce((a, b) => a + b, 0),
-    retriesByAgent: e.retries || {},
-    errors:   e.errors || [],
-    publishedPlatforms: e.published_platforms || [],
-  }));
+  const mapEtappe = e => {
+    const platform = platformCosts(e);
+    return {
+      id:        e.id,
+      n:         e.tag_nr || 0,
+      name:      etappeName(e),
+      datum:     e.datum || '',
+      route:     e.route_id || '',
+      kuerzel:   routeMap[e.route_id]?.kuerzel || '',
+      routeName: routeMap[e.route_id]?.name || '',
+      stimmung:  e.erzaehl_stimmung || '',
+      headline: e.tagesueberschrift || '',
+      status:   statusMap(e.pipeline_status),
+      run_at:   e.run_at || null,
+      run:      e.run || 1,
+      cost:     e.cost_total_eur    || 0,
+      llm:      e.cost_llm_eur      || 0,
+      imagegen: e.cost_imagegen_eur || 0,
+      video:    e.cost_video_eur    || 0,
+      tts:      e.cost_tts_eur      || 0,
+      wavespeed: platform.wavespeed,
+      atlas:     platform.atlas,
+      costSonstiges: platform.sonstiges || 0,
+      costPrecise:   platform.precise,
+      dur:      e.duration_total_s  || 0,
+      timings:  e.agent_timings_s   || {},
+      // I2: Wanderdauer/Höhenmeter des Etappentages selbst — nicht zu verwechseln
+      // mit `dur` (Pipeline-Laufzeit). NULL heißt „nicht erfasst", Zelle weglassen.
+      dauerMin:      e.dauer_min ?? null,
+      hoehenmeterAuf: e.hoehenmeter_auf ?? null,
+      hoehenmeterAb:  e.hoehenmeter_ab ?? null,
+      // I3
+      blogUrl:  e.blog_url || null,
+      photos_input:    e.photos_input    || 0,
+      photos_selected: e.photos_selected || 0,
+      t2i:      e.t2i_count   || 0,
+      clips:    e.video_count || 0,
+      unitCounts: e.unit_counts || null,
+      retries:  Object.values(e.retries || {}).reduce((a, b) => a + b, 0),
+      retriesByAgent: e.retries || {},
+      errors:   e.errors || [],
+      publishedPlatforms: e.published_platforms || [],
+      // B5: Etappen ohne run_at sind nie gelaufen — nicht „kostet €0.00", sondern
+      // „gibt es noch nicht". Die Ansicht muss das unterscheiden können.
+      nieGelaufen: !e.run_at,
+      // C7: cost_total_eur=null heißt „ohne Telemetrie", nicht „€0.00" — die Ansicht
+      // muss beides unterscheiden können statt mit || 0 auf einen Haufen zu werfen.
+      ohneTelemetrie: e.cost_total_eur == null,
+    };
+  };
 
-  const trend28 = valid.slice(0, 28).map(e => e.cost_total_eur || 0).reverse();
-  const retryHistory = valid.slice(0, 12).map(e =>
-    Object.values(e.retries || {}).reduce((a, b) => a + b, 0)
-  ).reverse();
+  // etappen enthält Redo-Dubletten (mehrere Runs pro route_id+datum). Für die
+  // Übersicht zählt pro Tag nur der höchste Run — dieselbe Logik wie das View
+  // etappen_aktuell. Der Kosten-Tab (A3) braucht dagegen jeden Run einzeln.
+  const neuesterProTag = new Map();
+  chronological.forEach(e => {
+    const key = `${e.route_id || ''}|${e.datum}`;
+    const bisher = neuesterProTag.get(key);
+    if (!bisher || (e.run || 1) > (bisher.run || 1)) neuesterProTag.set(key, e);
+  });
+  const etappenList = chronological
+    .filter(e => neuesterProTag.get(`${e.route_id || ''}|${e.datum}`) === e)
+    .map(mapEtappe);
+  const etappenListAlleRuns = chronological.map(mapEtappe);
 
   const timings = latest.agent_timings_s || {};
-  const latestRouteId = latest.route_id || null;
-  const routeEtappen  = latestRouteId ? valid.filter(e => e.route_id === latestRouteId) : valid;
-  const tripTotal     = Math.round(routeEtappen.reduce((s, e) => s + (e.cost_total_eur || 0), 0) * 100) / 100;
-  const tripKuerzel   = routeMap[latestRouteId]?.kuerzel || '';
-  const tripEtappenCount = routeEtappen.filter(e => e.cost_total_eur > 0).length;
   const runTime = latest.run_at ? latest.run_at.slice(11, 16) : '–';
+  const latestPlatform = platformCosts(latest);
 
   return {
     etappe:          latest.tag_nr || 0,
@@ -325,12 +432,9 @@ function transformData(rows, routeMap = {}) {
       imagegen:  latest.cost_imagegen_eur || 0,
       video:     latest.cost_video_eur    || 0,
       tts:       latest.cost_tts_eur      || 0,
-      wavespeed: platformCosts(latest).wavespeed,
-      atlas:     platformCosts(latest).atlas,
+      wavespeed: latestPlatform.wavespeed,
+      atlas:     latestPlatform.atlas,
     },
-    tripTotal,
-    tripKuerzel,
-    tripEtappenCount,
     duration: {
       total:    latest.duration_total_s || 0,
       analyst:  timings.analyst   || 0,
@@ -348,13 +452,80 @@ function transformData(rows, routeMap = {}) {
       selected: latest.photos_selected || 0,
     },
     publishedPlatforms: latest.published_platforms || [],
-    trend28,
-    retryHistory,
-    durationHistory: {
-      imagegen: valid.slice(0, 12).map(e => (e.agent_timings_s || {}).imagegen || 0).reverse(),
-    },
     etappenList,
+    etappenListAlleRuns,
+    ...nebenreihen(etappenList, routeMap, latest.route_id || null),
   };
+}
+
+// B8 — Nebenreihen (Trend-Kurven, Reise-Summen) aus *der Liste*, die die Ansicht
+// gerade zeigt. Vorher rechneten sie fest über alle Etappen aller Routen: mit
+// gesetztem Routenfilter zeigte die Übersicht weiter gemischte Routen.
+// list: chronologisch aufsteigend (ältester Tag zuerst), bereits gemappt.
+// E5: "die letzten N Runs" heißt nach Rechendatum (run_at) — wann die Pipeline
+// tatsächlich lief —, nicht nach Wandertag. Sortiert nach Datum stünde sonst ein
+// Redo, das erst gestern nachgeholt wurde, weit hinten im Verlauf.
+function letzteNachRechendatum(list, n) {
+  return [...list].filter(e => e.run_at).sort((a, b) => a.run_at.localeCompare(b.run_at)).slice(-n);
+}
+
+function nebenreihen(list, routeMap = {}, fallbackRouteId = null) {
+  const letzte = n => list.slice(-n);
+
+  // C7: cost_total_eur=null („ohne Telemetrie") darf nicht als 0 in die Kurve —
+  // sonst zeigt der Trend einen Kosteneinbruch, wo in Wahrheit nur nicht gemessen
+  // wurde. null bleibt null, AreaChart überspringt/interpoliert solche Punkte.
+  const trend28 = letzte(28).map(e => e.ohneTelemetrie ? null : (e.cost || 0));
+  // C6: echte Tag-Nummern statt der hart codierten T1/T7/T14/T21/T28-Achse — die
+  // stimmte nicht mehr, sobald weniger als 28 Runs vorliegen oder die Liste durch
+  // einen Routenfilter kürzer wird.
+  const trend28Labels = letzte(28).map(e => e.n || 0);
+  // E5: nach Rechendatum statt Wandertag — sonst zeigt der Verlauf Redo-Tage
+  // doppelt zeitversetzt oder lässt echte Läufe wegen eines nur früher
+  // gebuchten Wandertags aus dem Fenster fallen.
+  const retryRuns = letzteNachRechendatum(list, 12);
+  const retryHistory = retryRuns.map(e => e.retries || 0);
+  const durationHistory = { imagegen: retryRuns.map(e => e.timings?.imagegen || 0) };
+
+  // Bezugsroute: bei aktivem Filter die gefilterte, sonst die der letzten Etappe.
+  const routen = new Set(list.map(e => e.route).filter(Boolean));
+  const bezugsRoute = routen.size === 1 ? [...routen][0] : fallbackRouteId;
+  const routeEtappen = bezugsRoute ? list.filter(e => e.route === bezugsRoute) : list;
+
+  const tripTotal = Math.round(routeEtappen.reduce((s, e) => s + (e.cost || 0), 0) * 100) / 100;
+  const tripKuerzel = routeMap[bezugsRoute]?.kuerzel
+    || routeEtappen.find(e => e.route === bezugsRoute)?.kuerzel || '';
+  const tripEtappenCount = routeEtappen.filter(e => e.cost > 0).length;
+
+  return { trend28, trend28Labels, retryHistory, retryRuns, durationHistory, tripTotal, tripKuerzel, tripEtappenCount };
+}
+
+// B1/B2/B5 — die Liste, die die Etappen-Ansicht zeigt.
+// routeFilter: route_id oder '' für „Alle Routen".
+// sortMode: 'wandertag' (Datum der Wanderung) | 'rechendatum' (run_at, wann die
+// Pipeline gelaufen ist). Ohne Routenfilter wird immer erst nach Route gruppiert —
+// sonst schneiden sich die Datumsbereiche der Routen ineinander.
+function viewListe(alle, routeFilter, sortMode) {
+  const list = routeFilter ? alle.filter(e => e.route === routeFilter) : alle.slice();
+
+  const routenOrder = [];
+  alle.forEach(e => { if (!routenOrder.includes(e.route)) routenOrder.push(e.route); });
+  const routeRang = r => { const i = routenOrder.indexOf(r); return i < 0 ? 999 : i; };
+
+  return list.sort((a, b) => {
+    if (!routeFilter) {
+      const dr = routeRang(a.route) - routeRang(b.route);
+      if (dr) return dr;
+    }
+    if (sortMode === 'rechendatum') {
+      // Nie gelaufene Etappen (kein run_at) haben kein Rechendatum → ans Ende.
+      if (!a.run_at && !b.run_at) return (a.datum || '').localeCompare(b.datum || '');
+      if (!a.run_at) return 1;
+      if (!b.run_at) return -1;
+      return a.run_at.localeCompare(b.run_at);
+    }
+    return (a.datum || '').localeCompare(b.datum || '');
+  });
 }
 
 // ─── Reliability aus Echtdaten ────────────────────────────────────────────────
@@ -362,22 +533,23 @@ function transformData(rows, routeMap = {}) {
 // Wo nichts vorliegt, liefert die Funktion leere Listen → UI zeigt sauberen Zustand.
 function reliabilityStats(data) {
   const list = data.etappenList || [];
-  const recent = list.slice(-12);
+  // E5: "die letzten 12" nach Rechendatum, nicht nach Wandertag (siehe
+  // letzteNachRechendatum) — sonst zählt ein Redo-Tag am falschen Zeitpunkt mit.
+  const recent = letzteNachRechendatum(list, 12);
   const n = recent.length;
   const avg = a => a.length ? a.reduce((s, x) => s + x, 0) / a.length : 0;
 
-  const byAgent = {};
-  recent.forEach(e => Object.entries(e.retriesByAgent || {}).forEach(([k, v]) => {
-    byAgent[k] = (byAgent[k] || 0) + (v || 0);
-  }));
-  const agentRows = Object.entries(byAgent)
-    .map(([name, retries]) => ({ name, retries, total: n }))
-    .sort((a, b) => b.retries - a.retries);
-
-  const recentRetries = recent.reduce((s, e) => s + e.retries, 0);
-  const tripRetries   = list.reduce((s, e) => s + e.retries, 0);
-  const ran           = list.filter(e => e.cost > 0 || e.dur > 0);
-  const runsWithError = ran.filter(e => (e.errors?.length || 0) > 0).length;
+  const tripRetries = list.reduce((s, e) => s + e.retries, 0);
+  // C7: "ist gelaufen" ist B5s nieGelaufen-Flag (aus run_at), nicht "hat Kosten/Dauer
+  // > 0" — sonst zählt ein Lauf ohne Telemetrie (cost=null→0, dur=0) fälschlich als
+  // "nie gelaufen", obwohl er lief.
+  const ran = list.filter(e => !e.nieGelaufen);
+  // C8: statusMap statt reinem errors[]-Count — ein Run mit pipeline_status='fehler'
+  // aber ohne errors-Eintrag galt vorher als Erfolg. Ein Run zählt als Fehler, wenn
+  // entweder der Status es sagt ODER ein unresolved Error in errors[] steht.
+  const runsWithError = ran.filter(e =>
+    e.status === 'error' || (e.errors || []).some(err => !err.resolved)
+  ).length;
   const successRate   = ran.length ? Math.round(((ran.length - runsWithError) / ran.length) * 100) : 100;
 
   const imgSeries = recent.map(e => e.retriesByAgent?.imagegen || 0);
@@ -401,9 +573,7 @@ function reliabilityStats(data) {
     });
   }
 
-  return { agentRows, recentRetries, tripRetries, successRate, runsWithError,
-    ranCount: ran.length, imgSeries, imgTrend, imgStart, imgEnd, events,
-    warnings: events.length, recentCount: n };
+  return { tripRetries, successRate, runsWithError, ranCount: ran.length, events, warnings: events.length };
 }
 
 // ─── Icons (inline SVG) ───────────────────────────────────────────────────────
@@ -472,10 +642,11 @@ function PublishedKPI({ platforms }) {
 // ─── Shared primitives ────────────────────────────────────────────────────────
 function Pill({ state = 'ok', label }) {
   const m = {
-    ok:      { bg: T.okSoft,   fg: T.ok,   Icon: ICircleCheck },
-    partial: { bg: T.warnSoft, fg: T.warn, Icon: IAlert },
-    warn:    { bg: T.warnSoft, fg: T.warn, Icon: IAlert },
-    error:   { bg: T.errSoft,  fg: T.err,  Icon: IAlert },
+    ok:      { bg: T.okSoft,     fg: T.ok,     Icon: ICircleCheck },
+    partial: { bg: T.warnSoft,   fg: T.warn,   Icon: IAlert },
+    warn:    { bg: T.warnSoft,   fg: T.warn,   Icon: IAlert },
+    error:   { bg: T.errSoft,    fg: T.err,    Icon: IAlert },
+    running: { bg: T.accentSoft, fg: T.accentInk, Icon: IActivity },
   }[state] || { bg: T.okSoft, fg: T.ok, Icon: ICircleCheck };
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px',
@@ -485,9 +656,13 @@ function Pill({ state = 'ok', label }) {
   );
 }
 
-function AreaChart({ points, h = 60, accent, id }) {
+function AreaChart({ points: pointsIn, h = 60, accent, id }) {
   const col = accent || T.accent;
   const gid = `g-${id || Math.random().toString(36).slice(2)}`;
+  // C7: null-Punkte ("ohne Telemetrie", trend28) sind kein Kosteneinbruch — aus
+  // der Kurve rausfiltern statt sie als 0 zu zeichnen (NaN im Pfad wäre die Folge).
+  const points = pointsIn.filter(v => typeof v === 'number');
+  if (!points.length) return <svg viewBox={`0 0 300 ${h}`} style={{ width: '100%', height: h, display: 'block' }} />;
   const max = Math.max(...points);
   const min = Math.min(...points);
   const range = max - min || 1;
@@ -686,7 +861,10 @@ function TabUebersicht({ data, selectedEtappe }) {
   const clips = latestE?.clips || 0;
   const costTrend = trendInfo(data.trend28);
   const rel = reliabilityStats(data);
-  const recentRetry = data.etappenList.slice(-data.retryHistory.length);
+  // E5: die Runs hinter dem Balkendiagramm sind jetzt nach Rechendatum gewählt
+  // (data.retryRuns) — vorher zeigte data.etappenList.slice(...) hier die letzten
+  // Wandertage, was bei Redos nicht dieselben Runs waren wie im Chart.
+  const recentRetry = data.retryRuns || [];
   const imgDurTrend = trendInfo(data.durationHistory.imagegen);
 
   return (
@@ -700,22 +878,33 @@ function TabUebersicht({ data, selectedEtappe }) {
           sub={avgDurRoute ? `Ø ${fmtDur(avgDurRoute)}${data.tripKuerzel ? ' · ' + data.tripKuerzel : ''} · ${routeDurEtappen.length} Etappen` : 'Keine Daten'} />
         <KPI icon={IRefresh} label="Retries"
           value={String(latestE?.retries ?? 0)}
-          sub={latestE?.errors?.length ? `${latestE.errors.length} Fehler · bitte prüfen` : 'alle resolved'} />
+          sub={fehlerSub(latestE?.errors)} />
         <PublishedKPI platforms={latestE?.publishedPlatforms || []} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1.1fr 1fr', gap: 14 }}>
         <Panel>
-          <PanelHeader icon={ICoins} label="Kosten-Breakdown" serif="Wo geht das Geld hin?"
+          <PanelHeader icon={ICoins} label="Kosten-Breakdown · hochgerechnet" serif="Wo geht das Geld hin?"
             right={<div style={{ textAlign: 'right' }}>
               <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>€{(latestE?.cost || 0).toFixed(2)}</div>
               <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>dieser Run</div>
             </div>} />
+          {/* C3: Schätzwert aus Einheitspreisen, kein Beleg — der ist im Ist-Kosten-Tab. */}
+          <div style={{ fontSize: 11, color: T.muted, marginBottom: 14, lineHeight: 1.4 }}>
+            hochgerechnet aus Einheitspreisen{!latestE?.costPrecise ? ' (≈, alte Etappe ohne Stückzahlen)' : ''} ·
+            Belege im Ist-Kosten-Tab
+          </div>
           <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-            <CostBar name="Anthropic"  value={`€${(latestE?.llm || 0).toFixed(2)}`}        pct={costPct('llm')}       color={T.accent} />
+            <CostBar name="LLM (Claude + Gemini)" value={`€${(latestE?.llm || 0).toFixed(2)}`}        pct={costPct('llm')}       color={T.accent} />
             <CostBar name="Atlas"      value={`€${(latestE?.atlas || 0).toFixed(2)}`}       pct={costPct('atlas')}     color="#9F6BF5" />
             <CostBar name="WaveSpeed"  value={`€${(latestE?.wavespeed || 0).toFixed(2)}`}   pct={costPct('wavespeed')} color="#C2A4F8" />
-            <CostBar name="FAL.ai"     value={`€${(latestE?.tts || 0).toFixed(2)}`}         pct={costPct('tts')}       color="#DFCEFA" />
+            <CostBar name="TTS + Musik" value={`€${(latestE?.tts || 0).toFixed(2)}`}         pct={costPct('tts')}       color="#DFCEFA" />
+            {/* C4: negativer Rest aus der Heuristik (Atlas-Anteil < WaveSpeed-Schätzung)
+                wird ausgewiesen statt mit Math.max(0,…) stumm gekappt — sonst gingen
+                die Balken nicht mehr auf den Gesamtbetrag auf. */}
+            {latestE?.costSonstiges > 0 && (
+              <CostBar name="sonstiges (Heuristik-Rest)" value={`€${latestE.costSonstiges.toFixed(2)}`} pct={costPct('costSonstiges')} color={T.mutedSoft} />
+            )}
           </div>
           <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
@@ -761,6 +950,21 @@ function TabUebersicht({ data, selectedEtappe }) {
           right={rel.warnings > 0
             ? <Pill state="warn" label={`${rel.warnings} aktive Warnung${rel.warnings === 1 ? '' : 'en'}`} />
             : <Pill state="ok" label="alles stabil" />} />
+        {/* E3: Erfolgsrate + Retries Reise Σ standen bis zum Umbau von Block E nur
+            im Reliability-Tab — der zeigt seit E1 nur noch die gewählte Etappe,
+            darum ziehen die beiden Reise-Kennzahlen hierher in die Übersicht. */}
+        <div style={{ display: 'flex', gap: 28, marginBottom: 18, flexWrap: 'wrap' }}>
+          <div>
+            <div style={{ fontFamily: T.serif, fontSize: 26, fontWeight: 400, color: T.ink, lineHeight: 1 }}>{rel.successRate}%</div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>
+              Erfolgsrate · {rel.runsWithError ? `${rel.runsWithError} von ${rel.ranCount} Runs mit Fehler` : `${rel.ranCount} Runs, 0 Fehler`}
+            </div>
+          </div>
+          <div>
+            <div style={{ fontFamily: T.serif, fontSize: 26, fontWeight: 400, color: T.ink, lineHeight: 1 }}>{rel.tripRetries}</div>
+            <div style={{ fontSize: 11, color: T.muted, marginTop: 4 }}>Retries Reise Σ{data.tripKuerzel ? ` · ${data.tripKuerzel}` : ''}</div>
+          </div>
+        </div>
         <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1.2fr 1fr', gap: 20 }}>
           <div>
             <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 8 }}>Retries pro Run · letzte {data.retryHistory.length}</div>
@@ -791,9 +995,10 @@ function TabKosten({ data, selectedEtappe }) {
   const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
   const ct = curE?.cost || 1;
   const costPct = k => ct > 0 ? Math.round(((curE?.[k] || 0) / ct) * 100) : 0;
-  const withCost = data.etappenList.filter(e => e.cost > 0);
+  const alleRuns = data.etappenListAlleRuns || data.etappenList;
+  const withCost = alleRuns.filter(e => e.cost > 0);
   const teuerste = withCost.length ? withCost.reduce((max, e) => e.cost > max.cost ? e : max) : null;
-  const maxCost = Math.max(...data.etappenList.map(x => x.cost), 0.01);
+  const maxCost = Math.max(...alleRuns.map(x => x.cost), 0.01);
   const costTrend = trendInfo(data.trend28);
 
   const toggleSort = (col) => {
@@ -801,7 +1006,7 @@ function TabKosten({ data, selectedEtappe }) {
     else { setSortBy(col); setSortDir(col === 'datum' || col === 'n' ? 'asc' : 'desc'); }
   };
 
-  const sorted = [...data.etappenList].sort((a, b) => {
+  const sorted = [...alleRuns].sort((a, b) => {
     let v;
     if      (sortBy === 'datum')   v = a.datum.localeCompare(b.datum);
     else if (sortBy === 'n')       v = a.n - b.n;
@@ -840,7 +1045,9 @@ function TabKosten({ data, selectedEtappe }) {
             right={<TrendBadge dir={costTrend.dir} val={costTrend.val} />} />
           <AreaChart points={data.trend28} h={120} id="k-trend" />
           <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>
-            <span>T1</span><span>T7</span><span>T14</span><span>T21</span><span>T28</span>
+            {/* C6: echte Tag-Nummern der gezeigten Runs statt der hart codierten
+                T1/T7/T14/T21/T28-Achse, die bei <28 Runs oder Routenfilter nicht mehr stimmte. */}
+            {trendAxisTicks(data.trend28Labels).map((n, i) => <span key={i}>{n ? `T${n}` : ''}</span>)}
           </div>
         </Panel>
 
@@ -894,14 +1101,31 @@ function TabKosten({ data, selectedEtappe }) {
                     </td>
                     <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft, whiteSpace: 'nowrap' }}>T{e.n} · {e.datum?.slice(5)}</td>
                     <td style={{ padding: '10px', color: T.ink, fontWeight: e.id === (selectedEtappe?.id ?? data.latestId) ? 600 : 400 }}>
-                      <div>{e.name}</div>
+                      <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                        <span>{e.name}</span>
+                        {e.run > 1 && (
+                          <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, padding: '2px 6px',
+                            borderRadius: 4, background: T.accentSoft, color: T.accentInk }}>RUN {e.run}</span>
+                        )}
+                        {/* B5: kein run_at heißt „nie gelaufen" — nicht „hat €0.00 gekostet". */}
+                        {e.nieGelaufen && (
+                          <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, padding: '2px 6px',
+                            borderRadius: 4, background: T.surfaceAlt, color: T.muted, whiteSpace: 'nowrap' }}>nie gelaufen</span>
+                        )}
+                        {/* C7: gelaufen, aber cost_total_eur=null — anderer Fall als "nie gelaufen",
+                            z.B. Lauf vor dem Telemetrie-Einbau oder Abbruch vor dem Kosten-Write. */}
+                        {!e.nieGelaufen && e.ohneTelemetrie && (
+                          <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, padding: '2px 6px',
+                            borderRadius: 4, background: T.surfaceAlt, color: T.muted, whiteSpace: 'nowrap' }}>ohne Telemetrie</span>
+                        )}
+                      </div>
                       {e.stimmung && <div style={{ fontSize: 10, color: T.mutedSoft, fontStyle: 'italic', marginTop: 2 }}>{e.stimmung}</div>}
                     </td>
-                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>€{e.cost.toFixed(2)}</td>
-                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{e.llm.toFixed(2)}</td>
-                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{e.imagegen.toFixed(2)}</td>
-                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{e.video.toFixed(2)}</td>
-                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>€{e.tts.toFixed(2)}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: (e.nieGelaufen || e.ohneTelemetrie) ? T.mutedSoft : T.ink, fontWeight: 600 }}>{(e.nieGelaufen || e.ohneTelemetrie) ? '–' : `€${e.cost.toFixed(2)}`}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>{(e.nieGelaufen || e.ohneTelemetrie) ? '–' : `€${e.llm.toFixed(2)}`}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>{(e.nieGelaufen || e.ohneTelemetrie) ? '–' : `€${e.imagegen.toFixed(2)}`}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>{(e.nieGelaufen || e.ohneTelemetrie) ? '–' : `€${e.video.toFixed(2)}`}</td>
+                    <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.muted }}>{(e.nieGelaufen || e.ohneTelemetrie) ? '–' : `€${e.tts.toFixed(2)}`}</td>
                     <td style={{ padding: '10px' }}>
                       <div style={{ width: 60, height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
                         <div style={{ height: '100%', width: `${(e.cost / maxCost) * 100}%`, background: T.accent, borderRadius: 3 }} />
@@ -934,6 +1158,7 @@ function TabPerformance({ data, selectedEtappe }) {
   const totalSec = dur.total || 1;
   const withDur = data.etappenList.filter(e => e.dur > 0);
   const avgDur = withDur.length ? Math.round(withDur.reduce((s, e) => s + e.dur, 0) / withDur.length) : 0;
+  const maxDur = Math.max(...withDur.map(e => e.dur), 1);
   const agentKeys = ['analyst', 'narrator', 'imagegen', 'animator', 'tts'];
   const slowest = agentKeys.reduce((max, k) => dur[k] > dur[max] ? k : max, agentKeys[0]);
   const agents = agentKeys.map(k => ({ name: k, seconds: dur[k] || 0 }));
@@ -1015,7 +1240,7 @@ function TabPerformance({ data, selectedEtappe }) {
           <table style={{ width: '100%', borderCollapse: 'collapse', fontFamily: T.sans, fontSize: 12 }}>
             <thead>
               <tr style={{ borderBottom: `1px solid ${T.border}` }}>
-                {['#', 'Etappe', 'Gesamt', 'Status', ''].map(h => (
+                {['Kürzel', '#', 'Etappe', 'Gesamt', 'Status', ''].map(h => (
                   <th key={h} style={{ textAlign: 'left', padding: '8px 10px', fontFamily: T.mono, fontSize: 10, color: T.muted, fontWeight: 500, textTransform: 'uppercase', letterSpacing: 0.5 }}>{h}</th>
                 ))}
               </tr>
@@ -1023,13 +1248,28 @@ function TabPerformance({ data, selectedEtappe }) {
             <tbody>
               {data.etappenList.map(e => (
                 <tr key={e.id} style={{ borderBottom: `1px solid ${T.border}`, background: e.id === (selectedEtappe?.id ?? data.latestId) ? T.accentSoft : 'transparent' }}>
+                  {/* B2: ohne Routenfilter mischt die Liste Routen — das Kürzel je Zeile
+                      macht den Wechsel sichtbar. */}
+                  <td style={{ padding: '10px' }}>
+                    {e.kuerzel
+                      ? <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accentInk, background: T.accentSoft, borderRadius: 4, padding: '2px 7px', whiteSpace: 'nowrap' }}>{e.kuerzel}</span>
+                      : <span style={{ fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>–</span>}
+                  </td>
                   <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>T{e.n} · {e.datum?.slice(5)}</td>
-                  <td style={{ padding: '10px', color: T.ink, fontWeight: e.id === (selectedEtappe?.id ?? data.latestId) ? 600 : 400 }}>{e.name}</td>
+                  <td style={{ padding: '10px', color: T.ink, fontWeight: e.id === (selectedEtappe?.id ?? data.latestId) ? 600 : 400 }}>
+                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                      <span>{e.name}</span>
+                      {e.nieGelaufen && (
+                        <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, padding: '2px 6px',
+                          borderRadius: 4, background: T.surfaceAlt, color: T.muted, whiteSpace: 'nowrap' }}>nie gelaufen</span>
+                      )}
+                    </div>
+                  </td>
                   <td style={{ padding: '10px', fontFamily: T.mono, fontSize: 12, color: T.ink, fontWeight: 600 }}>{e.dur ? fmtDur(e.dur) : '–'}</td>
                   <td style={{ padding: '10px' }}><Pill state={e.status} label={e.status} /></td>
                   <td style={{ padding: '10px' }}>
                     <div style={{ width: 80, height: 6, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${(e.dur / 850) * 100}%`, background: e.dur > 800 ? T.warn : T.accent, borderRadius: 3 }} />
+                      <div style={{ height: '100%', width: `${(e.dur / maxDur) * 100}%`, background: e.dur > maxDur * 0.94 ? T.warn : T.accent, borderRadius: 3 }} />
                     </div>
                   </td>
                 </tr>
@@ -1042,113 +1282,114 @@ function TabPerformance({ data, selectedEtappe }) {
   );
 }
 
+// E1: Reliability zeigt nur noch die gewählte Etappe (Retries nach Agent,
+// Fehlerliste, Pipeline-Schritte dieses Runs) — die Reise-Aggregate (Erfolgsrate,
+// Retries Reise Σ, Retry-Verlauf) wohnen seit E3 in der Übersicht, sonst stünden
+// dieselben Zahlen doppelt. „letzte 12 Runs" mischte hier ohnehin schon Bezugsgrößen
+// (Wandertag vs. gewählter Run) — pro Etappe gibt es dieses Problem nicht mehr.
 function TabReliability({ data, selectedEtappe }) {
   const mobile = useMobile();
-  const rel = reliabilityStats(data);
   const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
-  const retryTrend = trendInfo(data.retryHistory);
-  const avgRetry = rel.recentCount ? rel.recentRetries / rel.recentCount : 0;
-  const curByAgent = curE?.retriesByAgent || {};
-  const curTopAgent = Object.entries(curByAgent).sort((a, b) => b[1] - a[1])[0];
-  const retryEtappen = data.etappenList.filter(e => e.retries > 0);
-  const showImgTrend = rel.imgSeries.some(v => v > 0);
+  const [steps, setSteps] = React.useState([]);
+  React.useEffect(() => {
+    if (curE?.id) fetchSteps(curE.id).then(setSteps);
+    else setSteps([]);
+  }, [curE?.id]);
+
+  const agentRows = Object.entries(curE?.retriesByAgent || {})
+    .map(([name, retries]) => ({ name, retries }))
+    .filter(a => a.retries > 0)
+    .sort((a, b) => b.retries - a.retries);
+  const maxAgentRetries = Math.max(...agentRows.map(a => a.retries), 1);
+  const curTopAgent = agentRows[0];
+  const errors = curE?.errors || [];
+
+  // D9: dieselbe Gruppierung wie im EtappeDetailModal (gruppiereSteps) — derselbe
+  // Verschluck-Bug (letzte Zeile pro Schritt statt pro Variante) saß hier früher
+  // genauso, weil das Panel "same logic as TabProgress" nachbaute. Nur begonnene
+  // Schritte: dieses Panel ist Protokoll eines gelaufenen Runs, keine Vorschau.
+  const stepGruppen = gruppiereSteps(steps, { zeigeOffene: false });
+  const stepsFertig = stepGruppen.filter(g => g.status === 'done' || g.status === 'skipped').length;
+
+  if (!curE) return <Panel><div style={{ color: T.muted, fontSize: 13 }}>Keine Etappe gewählt.</div></Panel>;
+
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 14 }}>
-        <KPI icon={IShield} label="Retries (gewählter Run)"
-          value={String(curE?.retries ?? 0)}
-          sub={curE?.retries
-            ? `${curTopAgent ? curTopAgent[0] + ' · ' : ''}${(curE?.errors?.length || 0) ? curE.errors.length + ' Fehler' : 'alle resolved'}`
-            : 'keine Retries'} />
-        <KPI icon={IShield} label="Retries Reise Σ"
-          value={String(rel.tripRetries)}
-          sub={`${rel.recentCount} Runs · Ø ${avgRetry.toFixed(1)} / Run`}
-          trend={retryTrend.val !== 'stabil' ? { dir: retryTrend.dir, v: retryTrend.val } : undefined} />
-        <KPI icon={IShield} label="Erfolgsrate"
-          value={`${rel.successRate}%`}
-          sub={rel.runsWithError ? `${rel.runsWithError} Run${rel.runsWithError === 1 ? '' : 's'} mit Fehler` : '0 Fehler'} />
+        <KPI icon={IShield} label="Retries (dieser Run)"
+          value={String(curE.retries ?? 0)}
+          sub={curE.retries ? `${curTopAgent ? curTopAgent.name + ' am häufigsten' : ''}` : 'keine Retries'} />
+        <KPI icon={IAlert} label="Fehler (dieser Run)"
+          value={String(errors.length)}
+          sub={fehlerSub(errors)} />
+        <KPI icon={IActivity} label="Pipeline-Schritte"
+          value={stepGruppen.length ? `${stepsFertig}/${stepGruppen.length}` : '–'}
+          sub={stepGruppen.length ? 'fertig / gesamt' : 'kein Protokoll für diesen Run'} />
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1.2fr 1fr', gap: 14 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 14 }}>
         <Panel>
-          <PanelHeader icon={IShield} label="Retry-Verlauf" serif={`Letzte ${data.retryHistory.length} Runs`} />
-          <BarChart values={data.retryHistory} h={120}
-            colorFn={(v) => v > 1 ? `linear-gradient(180deg, ${T.warn}, ${T.warn}cc)` : v > 0 ? T.accent : T.surfaceAlt} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: 8, fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>
-            {data.etappenList.slice(-data.retryHistory.length).map(e => <span key={e.id} style={{ flex: 1, textAlign: 'center' }}>{e.n}</span>)}
-          </div>
-          <div style={{ marginTop: 14, paddingTop: 14, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 16 }}>
-            {[{ color: T.accent, label: '1 Retry' }, { color: T.warn, label: '2+ Retries' }, { color: T.surfaceAlt, label: 'Kein Retry' }].map(l => (
-              <div key={l.label} style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-                <div style={{ width: 10, height: 10, borderRadius: 2, background: l.color, border: `1px solid ${T.border}` }} />
-                <span style={{ fontSize: 11, color: T.muted, fontFamily: T.sans }}>{l.label}</span>
-              </div>
-            ))}
-          </div>
-        </Panel>
-
-        <Panel>
-          <PanelHeader icon={IShield} label="Retries pro Agent" serif="Häufigkeit" />
-          {rel.agentRows.length > 0 ? (
+          <PanelHeader icon={IShield} label="Retries pro Agent" serif={`T${curE.n} · ${curE.name}`} />
+          {agentRows.length > 0 ? (
             <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {rel.agentRows.map(a => {
-                const pct = a.total ? (a.retries / a.total) * 100 : 0;
+              {agentRows.map(a => {
+                const pct = (a.retries / maxAgentRetries) * 100;
                 return (
                   <div key={a.name}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}>
                       <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink, fontWeight: 500 }}>{a.name}</span>
-                      <span style={{ fontFamily: T.mono, fontSize: 11, color: a.retries > 0 ? T.warn : T.mutedSoft }}>
-                        {a.retries} / {a.total}
-                      </span>
+                      <span style={{ fontFamily: T.mono, fontSize: 11, color: a.retries > 1 ? T.warn : T.accent }}>{a.retries}</span>
                     </div>
                     <div style={{ height: 8, background: T.surfaceAlt, borderRadius: 4, overflow: 'hidden' }}>
-                      <div style={{ height: '100%', width: `${pct || 2}%`, background: a.retries > 1 ? T.warn : a.retries > 0 ? T.accent : T.surfaceAlt, borderRadius: 4 }} />
+                      <div style={{ height: '100%', width: `${Math.min(pct, 100) || 2}%`, background: a.retries > 1 ? T.warn : T.accent, borderRadius: 4 }} />
                     </div>
                   </div>
                 );
               })}
             </div>
           ) : (
-            <div style={{ fontSize: 12, color: T.mutedSoft, fontStyle: 'italic' }}>Keine Retries in den letzten {rel.recentCount} Runs.</div>
+            <div style={{ fontSize: 12, color: T.mutedSoft, fontStyle: 'italic' }}>Keine Retries in diesem Run.</div>
           )}
-          {showImgTrend && (
-            <div style={{ marginTop: 16, paddingTop: 14, borderTop: `1px solid ${T.border}` }}>
-              <div style={{ fontSize: 11, color: T.muted, fontWeight: 500, marginBottom: 4 }}>Trend imagegen</div>
-              <AreaChart points={rel.imgSeries} h={36} accent={T.warn} id="rel-img-trend" />
-              <div style={{ marginTop: 6, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>Ø {rel.imgStart.toFixed(1)} → {rel.imgEnd.toFixed(1)}</span>
-                <TrendBadge dir={rel.imgTrend.dir} val={rel.imgTrend.val} />
-              </div>
+        </Panel>
+
+        <Panel>
+          <PanelHeader icon={IAlert} label="Fehler" serif={`T${curE.n} · ${curE.name}`} />
+          {errors.length > 0 ? (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+              {/* E4: resolved-Flag aus errors[] (add_error(resolved=…) schreibt es) statt
+                  pauschal "alle resolved" — vorher stand das da, sobald es überhaupt
+                  Fehler gab, egal ob die Telemetrie sie längst als behoben markiert hatte. */}
+              {errors.map((err, i) => (
+                <div key={i} style={{ padding: 12, background: err.resolved ? T.surfaceAlt : T.errSoft, borderRadius: 8,
+                  borderLeft: `3px solid ${err.resolved ? T.mutedSoft : T.err}` }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: 8 }}>
+                    <span style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{err.agent || 'Fehler'}</span>
+                    <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, padding: '1px 6px', borderRadius: 3,
+                      background: err.resolved ? T.okSoft : T.errSoft, color: err.resolved ? T.ok : T.err }}>
+                      {err.resolved ? 'resolved' : 'offen'}
+                    </span>
+                  </div>
+                  <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4, lineHeight: 1.45, wordBreak: 'break-word' }}>
+                    {err.msg || (typeof err === 'string' ? err : JSON.stringify(err))}
+                  </div>
+                </div>
+              ))}
             </div>
+          ) : (
+            <AllClearCard text="Keine Fehler in diesem Run" />
           )}
         </Panel>
       </div>
 
       <Panel>
-        <PanelHeader icon={IAlert} label="Ereignisse" serif="Alle Fehler & Warnungen" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          {rel.events.length > 0
-            ? rel.events.map((ev, i) => <EventCard key={i} ev={ev} />)
-            : <AllClearCard text="Keine Fehler oder Warnungen" />}
-
-          {retryEtappen.length > 0 && (
-            <div style={{ fontSize: 11, color: T.mutedSoft, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, marginTop: 4 }}>
-              Retries (resolved)
-            </div>
-          )}
-          {retryEtappen.map(e => (
-            <div key={e.id} style={{ padding: 14, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8 }}>
-              <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-                <div style={{ width: 28, height: 28, borderRadius: 6, background: T.surfaceAlt, display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0, fontFamily: T.mono, fontSize: 11, color: T.muted, fontWeight: 600 }}>T{e.n}</div>
-                <div style={{ flex: 1 }}>
-                  <div style={{ fontSize: 12.5, color: T.ink, fontWeight: 500 }}>{e.name}</div>
-                  <div style={{ fontSize: 11, color: T.muted, marginTop: 2 }}>{e.retries} Retr{e.retries === 1 ? 'y' : 'ies'} · alle resolved</div>
-                </div>
-                <Pill state={e.retries > 1 ? 'warn' : 'ok'} label={`${e.retries} Retr${e.retries === 1 ? 'y' : 'ies'}`} />
-              </div>
-            </div>
-          ))}
-        </div>
+        <PanelHeader icon={IActivity} label="Pipeline-Schritte" serif={`T${curE.n} · ${curE.name}`} />
+        {stepGruppen.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
+            {stepGruppen.map((g, i) => <StepRow key={g.step} gruppe={g} isLast={i === stepGruppen.length - 1} />)}
+          </div>
+        ) : (
+          <div style={{ fontSize: 12, color: T.mutedSoft, fontStyle: 'italic' }}>Keine Protokoll-Zeilen für diesen Run.</div>
+        )}
       </Panel>
     </div>
   );
@@ -1179,10 +1420,11 @@ function EtappeDetailModal({ etappe, onClose }) {
   const maxTiming = Math.max(...Object.values(etappe.timings), 1);
   const runTime = etappe.run_at ? new Date(etappe.run_at).toLocaleString('de-AT', { day:'2-digit', month:'2-digit', hour:'2-digit', minute:'2-digit' }) : '–';
 
-  // latest step per agent (same logic as TabProgress)
-  const grouped = {};
-  steps.forEach(s => { if (!grouped[s.step]) grouped[s.step] = []; grouped[s.step].push(s); });
-  const latestSteps = Object.values(grouped).map(arr => arr[arr.length - 1]);
+  // D9: dieselbe Gruppierung wie im Live-Run-Tab — hier steckte der
+  // Verschluck-Bug in derselben Form („same logic as TabProgress"). Nur die
+  // nie begonnenen Schritte bleiben weg: dieses Panel ist das Protokoll eines
+  // gelaufenen Runs, keine Vorschau auf das, was noch käme.
+  const stepGruppen = gruppiereSteps(steps, { zeigeOffene: false });
 
   return (
     <div onClick={onClose} style={{ position: 'fixed', inset: 0, background: 'rgba(20,16,28,0.45)', zIndex: 1000,
@@ -1236,6 +1478,28 @@ function EtappeDetailModal({ etappe, onClose }) {
             ))}
           </div>
 
+          {/* I2: Kennzahlen-Bande der Wanderung selbst (Dauer, Höhenmeter) — NULL
+              heißt „nicht erfasst", die Zeile fällt dann ganz weg statt eine
+              0/– vorzutäuschen. */}
+          {(etappe.dauerMin != null || etappe.hoehenmeterAuf != null || etappe.hoehenmeterAb != null) && (
+            <div style={{ display: 'flex', gap: mobile ? 12 : 20, flexWrap: 'wrap', fontSize: 12, color: T.muted }}>
+              {etappe.dauerMin != null && (
+                <span>Gehzeit <strong style={{ color: T.ink, fontWeight: 600 }}>{Math.floor(etappe.dauerMin / 60)}:{String(etappe.dauerMin % 60).padStart(2, '0')} Std</strong></span>
+              )}
+              {etappe.hoehenmeterAuf != null && (
+                <span>↑ <strong style={{ color: T.ink, fontWeight: 600 }}>{etappe.hoehenmeterAuf} hm</strong></span>
+              )}
+              {etappe.hoehenmeterAb != null && (
+                <span>↓ <strong style={{ color: T.ink, fontWeight: 600 }}>{etappe.hoehenmeterAb} hm</strong></span>
+              )}
+              {etappe.blogUrl && (
+                <a href={etappe.blogUrl} target="_blank" rel="noopener noreferrer" style={{ color: T.accent, textDecoration: 'none' }}>
+                  Blog-Beitrag ↗
+                </a>
+              )}
+            </div>
+          )}
+
           {/* Costs + Timings side by side */}
           <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1fr 1fr', gap: 16 }}>
             <div>
@@ -1280,12 +1544,12 @@ function EtappeDetailModal({ etappe, onClose }) {
           </div>
 
           {/* Pipeline Steps */}
-          {latestSteps.length > 0 && (
+          {stepGruppen.length > 0 && (
             <div>
               <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, marginBottom: 12 }}>Pipeline-Schritte</div>
               <div style={{ display: 'flex', flexDirection: 'column', gap: 0 }}>
-                {latestSteps.map((s, i) => (
-                  <StepRow key={i} step={s} isLast={i === latestSteps.length - 1} />
+                {stepGruppen.map((g, i) => (
+                  <StepRow key={g.step} gruppe={g} isLast={i === stepGruppen.length - 1} />
                 ))}
               </div>
             </div>
@@ -1310,30 +1574,44 @@ function EtappeDetailModal({ etappe, onClose }) {
 }
 
 // ─── Live Run Tab ─────────────────────────────────────────────────────────────
+// D2/D6: die elf Schritt-Namen, die die Pipeline wirklich schreibt, in ihrer
+// Soll-Reihenfolge (main.py: Foto-Analyse → _stage_map → _stage_narrator →
+// _stage_selektor → _stage_varianten [Bild-Zweig ∥ Narrator → Audio → Assembler →
+// Publisher] → _stage_carousel → _stage_blog). Vorher richtete sich die Ansicht
+// nach dem ersten Auftreten und kannte zwei Namen, die nie geschrieben wurden:
+// 'carousel' gibt es nicht, 'publisher' schreibt seit D7 die Pipeline (Slot 1)
+// bzw. die Edge Function ig-publish-queue (Slots 2–5).
+const STEP_ORDER = [
+  'analyst', 'map', 'narrator', 'selektor', 'imagegen', 'animator',
+  'audio', 'assembler', 'publisher', 'carousel_publisher', 'blog_publisher',
+];
+
 const STEP_LABELS = {
-  analyst:   'Analyst · Foto-Analyse',
-  map:       'Map & Geolocator',
-  narrator:  'Narrator · Erzählung',
-  selektor:  'Selektor · Auswahl',
-  imagegen:  'ImageGen · KI-Bilder',
-  animator:  'Animator · KI-Clips',
-  audio:     'Audio · Voice-Over',
-  assembler: 'Assembler · Rendering',
-  publisher: 'Publisher · Veröffentlichen',
-  carousel:  'Carousel · Karussell',
+  analyst:            'Analyst · Foto-Analyse',
+  map:                'Map & Geolocator',
+  narrator:           'Narrator · Erzählung',
+  selektor:           'Selektor · Auswahl',
+  imagegen:           'ImageGen · KI-Bilder',
+  animator:           'Animator · KI-Clips',
+  audio:              'Audio · Voice-Over',
+  assembler:          'Assembler · Rendering',
+  publisher:          'Publisher · Reel-Staffel',
+  carousel_publisher: 'Karussell · Veröffentlichen',
+  blog_publisher:     'Blog · Veröffentlichen',
 };
 
 const STEP_DESCRIPTIONS = {
-  analyst:   'Jedes Foto wird einzeln auf Motiv, Stimmung und Bildqualität geprüft. Claude entscheidet, welche Aufnahmen zur Etappe passen.',
-  map:       'GPS-Koordinaten werden aus den Fotos ausgelesen und Ortsnamen entlang der Route identifiziert. Bilder werden ihren Wegpunkten zugeordnet.',
-  narrator:  'Aus Stimmung, Route und ausgewählten Fotos entsteht die Erzählung des Tages. Claude schreibt Text, Caption und Titel.',
-  selektor:  'Die besten Fotos werden für Reel, Karussell und Thumbnail ausgewählt. Bildqualität und Erzählfluss bestimmen die Auswahl.',
-  imagegen:  'Für jedes ausgewählte Foto wird eine KI-generierte Szene erstellt. Nano Banana übersetzt Stimmung und Licht in neue Kompositionen.',
-  animator:  'Die KI-Bilder werden zu kurzen Clips animiert. Tempo und Bewegung folgen der Erzählstimmung der Etappe.',
-  audio:     'Der Erzähltext wird als Voice-Over gesprochen. ElevenLabs generiert die Stimme passend zum Tonfall der Geschichte.',
-  assembler: 'Clips, Voice-Over und Musik werden zum fertigen Reel zusammengeschnitten. Das Karussell wird aus den Fotos aufgebaut.',
-  publisher: 'Reel und Karussell werden auf Instagram veröffentlicht. Caption, Hashtags und Standort werden automatisch gesetzt.',
-  carousel:  'Das Karussell-Format wird aus Original- und KI-Bildern zusammengestellt. Acht Paare werden mit Beschriftungen hochgeladen.',
+  analyst:            'Jedes Foto wird einzeln auf Motiv, Stimmung und Bildqualität geprüft. Claude entscheidet, welche Aufnahmen zur Etappe passen.',
+  map:                'GPS-Koordinaten werden aus den Fotos ausgelesen und Ortsnamen entlang der Route identifiziert. Bilder werden ihren Wegpunkten zugeordnet.',
+  narrator:           'Aus Stimmung, Route und ausgewählten Fotos entsteht die Erzählung des Tages. Claude schreibt Text, Caption und Titel — einmal pro Stil.',
+  selektor:           'Die besten Fotos werden für Reel, Karussell und Thumbnail ausgewählt. Bildqualität und Erzählfluss bestimmen die Auswahl.',
+  imagegen:           'Für jedes ausgewählte Foto wird eine KI-generierte Szene erstellt. Nano Banana übersetzt Stimmung und Licht in neue Kompositionen.',
+  animator:           'Die KI-Bilder werden zu kurzen Clips animiert. Tempo und Bewegung folgen der Erzählstimmung der Etappe.',
+  audio:              'Der Erzähltext wird als Voice-Over gesprochen — pro Stil eine eigene Spur, die vier Stile laufen parallel.',
+  assembler:          'Clips, Voice-Over und Musik werden zum fertigen Reel zusammengeschnitten. Jeder Stil wird einzeln gerendert.',
+  publisher:          'Slot 1 (die Kür) postet die Pipeline direkt nach dem Veto-Fenster. Slots 2–5 stehen in der Queue und werden von der Edge Function über den Tag verteilt gepostet.',
+  carousel_publisher: 'Das Karussell aus Original- und KI-Bildern wird auf Instagram veröffentlicht.',
+  blog_publisher:     'Der Etappentext wandert als Blogbeitrag auf die Website — mit Karte, Bildern und eingebettetem Reel.',
 };
 
 const PROGRESS_UNIT = {
@@ -1343,6 +1621,16 @@ const PROGRESS_UNIT = {
   animator: (c, t) => `Clip ${c} von ${t}`,
   audio:    (c, t) => `Spur ${c} von ${t}`,
 };
+
+// G5: reel_varianten wird heute immer als jsonb-String geschrieben (Hitl1Panel.freigeben
+// bleibt dabei — das ist die kanonische Schreibform). Käme künftig eine echte Liste an,
+// würde JSON.parse(array) im try/catch still zu [] werden — deshalb hier den Array-Fall
+// zuerst behandeln, statt ihn stumm zu verschlucken.
+function parseReelVarianten(v) {
+  if (Array.isArray(v)) return v;
+  if (!v) return [];
+  try { return JSON.parse(v); } catch { return []; }
+}
 
 function parsePhotoProgress(detail) {
   if (!detail) return null;
@@ -1354,54 +1642,181 @@ function parsePhotoProgress(detail) {
   return { current, total };
 }
 
-function StepRow({ step, isLast }) {
-  const statusStyle = {
-    running: { dot: T.accent, label: 'läuft…', bg: T.accentSoft, fg: T.accentInk },
-    done:    { dot: T.ok,     label: 'fertig',  bg: T.okSoft,     fg: T.ok },
-    error:   { dot: T.err,    label: 'Fehler',  bg: T.errSoft,    fg: T.err },
-    skipped: { dot: T.mutedSoft, label: 'übersprungen', bg: T.surfaceAlt, fg: T.muted },
-  }[step.status] || { dot: T.muted, label: step.status, bg: T.surfaceAlt, fg: T.muted };
+// D8: ein Schritt, der so lange auf 'running' steht, läuft nicht mehr — er hängt.
+const HAENGER_MS = 30 * 60 * 1000;
 
-  const ts       = step.ts ? new Date(step.ts).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
-  const desc     = STEP_DESCRIPTIONS[step.step];
-  const progress = parsePhotoProgress(step.detail);
-  const showDesc = desc && (step.status === 'running' || step.status === 'done');
-  const unitFn   = PROGRESS_UNIT[step.step];
+const STEP_STATUS = {
+  running: { dot: T.accent,    label: 'läuft…',       bg: T.accentSoft, fg: T.accentInk },
+  done:    { dot: T.ok,        label: 'fertig',        bg: T.okSoft,     fg: T.ok },
+  error:   { dot: T.err,       label: 'Fehler',        bg: T.errSoft,    fg: T.err },
+  skipped: { dot: T.mutedSoft, label: 'übersprungen',  bg: T.surfaceAlt, fg: T.muted },
+  haenger: { dot: T.warn,      label: 'abgebrochen?',  bg: T.warnSoft,   fg: T.warn },
+  offen:   { dot: T.border,    label: 'offen',         bg: T.surfaceAlt, fg: T.mutedSoft },
+};
+
+// D3/D4: pro (Schritt, Variante) gewinnt die zeitlich letzte Zeile — ein 'done'
+// nach einem 'error' ist ein gelungener Retry und darf das error ablösen. Auf
+// Schritt-Ebene wird über die Varianten aggregiert: der Schritt zeigt Fehler,
+// solange irgendeine Variante zuletzt auf 'error' steht.
+//
+// Vorher nahm die Ansicht stumpf die letzte Zeile pro Schritt. Bei vier parallel
+// gerenderten Stilen heißt das: der Fehler von Variante A verschwindet, sobald
+// Variante B ihr 'running' hinterherschreibt.
+//
+// Läufe von vor der variante-Spalte (D1) haben überall NULL — die fallen auf
+// genau eine Gruppe pro Schritt zusammen und sehen aus wie bisher. Rückwirkend
+// lässt sich das nicht aufdröseln, die Kennung wurde damals nicht geschrieben.
+function gruppiereSteps(steps, { jetzt = Date.now(), zeigeOffene = true } = {}) {
+  const chronologisch = [...(steps || [])]
+    .sort((a, b) => new Date(a.ts || 0) - new Date(b.ts || 0));
+
+  const proSchritt = new Map();
+  chronologisch.forEach(s => {
+    if (!proSchritt.has(s.step)) proSchritt.set(s.step, new Map());
+    proSchritt.get(s.step).set(s.variante || '', s);   // letzte Zeile gewinnt
+  });
+
+  // Namen, die die Pipeline schreibt, die Soll-Liste aber (noch) nicht kennt,
+  // hinten anhängen statt sie zu verschlucken.
+  const namen = STEP_ORDER.concat(
+    [...proSchritt.keys()].filter(n => !STEP_ORDER.includes(n))
+  );
+
+  return namen.map(step => {
+    const varMap = proSchritt.get(step);
+    if (!varMap) {
+      return { step, status: 'offen', begonnen: false, varianten: [],
+               ts: null, detail: null, fertig: 0, fehler: 0, uebersprungen: 0, gesamt: 0 };
+    }
+    const varianten = [...varMap.values()].map(row => ({
+      variante: row.variante || null,
+      status: (row.status === 'running' && row.ts &&
+               (jetzt - new Date(row.ts).getTime()) > HAENGER_MS) ? 'haenger' : row.status,
+      row,
+    }));
+    const hat = st => varianten.some(v => v.status === st);
+    const status = hat('error')   ? 'error'
+                 : hat('haenger') ? 'haenger'
+                 : hat('running') ? 'running'
+                 : varianten.every(v => v.status === 'skipped') ? 'skipped'
+                 : 'done';
+    const neueste = varianten.reduce((a, b) =>
+      new Date(b.row.ts || 0) > new Date(a.row.ts || 0) ? b : a);
+    return {
+      step, status, begonnen: true, varianten,
+      ts: neueste.row.ts, detail: neueste.row.detail,
+      fertig:        varianten.filter(v => v.status === 'done').length,
+      fehler:        varianten.filter(v => v.status === 'error').length,
+      haenger:       varianten.filter(v => v.status === 'haenger').length,
+      uebersprungen: varianten.filter(v => v.status === 'skipped').length,
+      gesamt:        varianten.length,
+    };
+  }).filter(g => zeigeOffene || g.begonnen);
+}
+
+// Eine Zeile pro Variante — nur wenn es mehr als eine gibt (D4).
+function VariantenListe({ varianten }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 5, marginTop: 8 }}>
+      {varianten.map((v, i) => {
+        const st = STEP_STATUS[v.status] || STEP_STATUS.offen;
+        const zeigeGrund = !!v.row.detail;
+        return (
+          <div key={v.variante || i} style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+            <span style={{ width: 6, height: 6, borderRadius: '50%', background: st.dot, flexShrink: 0 }} />
+            <span style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>
+              {v.variante || 'ohne Varianten-Kennung'}
+            </span>
+            <span style={{ padding: '1px 6px', background: st.bg, color: st.fg,
+              fontFamily: T.mono, fontSize: 9, fontWeight: 600, borderRadius: 3 }}>
+              {st.label}
+            </span>
+            {zeigeGrund && (
+              <span style={{ flex: '1 1 100%', paddingLeft: 14, fontSize: 11, lineHeight: 1.45,
+                color: v.status === 'error' ? T.err : v.status === 'haenger' ? T.warn : T.mutedSoft }}>
+                {v.row.detail}
+              </span>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function StepRow({ gruppe, isLast }) {
+  const mobile = useMobile();
+  const statusStyle = STEP_STATUS[gruppe.status]
+    || { dot: T.muted, label: gruppe.status, bg: T.surfaceAlt, fg: T.muted };
+
+  const ts       = gruppe.ts ? new Date(gruppe.ts).toLocaleTimeString('de-AT', { hour: '2-digit', minute: '2-digit', second: '2-digit' }) : '';
+  const desc     = STEP_DESCRIPTIONS[gruppe.step];
+  const mehrere  = gruppe.gesamt > 1;
+  // Auch eine einzelne benannte Variante wird aufgeschlüsselt — sonst steht bei
+  // „Assembler · läuft…" nicht, welcher Stil gerade gerendert wird.
+  const zeigeVarianten = gruppe.varianten.some(v => v.variante);
+  // Der Fortschrittsbalken ("Foto 12 / 26") gehört zu Schritten, die einmal pro Run
+  // laufen — bei Varianten wäre die Zahl der letzten Zeile irreführend.
+  const progress = zeigeVarianten ? null : parsePhotoProgress(gruppe.detail);
+  const showDesc = desc && ['running', 'done', 'haenger'].includes(gruppe.status);
+  const unitFn   = PROGRESS_UNIT[gruppe.step];
   const progressLabel = progress && unitFn ? unitFn(progress.current, progress.total) : progress ? `${progress.current} von ${progress.total}` : null;
+  const zeigeDetail = !zeigeVarianten && gruppe.detail;
+  const hatInhalt = showDesc || zeigeDetail || zeigeVarianten;
 
   return (
     <div style={{ display: 'flex', gap: 16, position: 'relative' }}>
       <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', flexShrink: 0, width: 20 }}>
         <div style={{
-          width: 12, height: 12, borderRadius: '50%', background: statusStyle.dot,
-          flexShrink: 0, marginTop: 4,
-          boxShadow: step.status === 'running' ? `0 0 0 4px ${T.accentSoft}` : 'none',
+          width: 12, height: 12, borderRadius: '50%',
+          background: gruppe.status === 'offen' ? 'transparent' : statusStyle.dot,
+          border: gruppe.status === 'offen' ? `2px solid ${T.border}` : 'none',
+          boxSizing: 'border-box', flexShrink: 0, marginTop: 4,
+          boxShadow: gruppe.status === 'running' ? `0 0 0 4px ${T.accentSoft}` : 'none',
         }} />
         {!isLast && <div style={{ width: 2, flex: 1, background: T.border, marginTop: 4 }} />}
       </div>
-      <div style={{ flex: 1, paddingBottom: isLast ? 0 : 22 }}>
-        {/* Name + badge + timestamp */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: showDesc || step.detail ? 6 : 0 }}>
-          <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>
-            {STEP_LABELS[step.step] || step.step}
-          </span>
-          <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px',
-            background: statusStyle.bg, color: statusStyle.fg,
-            fontFamily: T.mono, fontSize: 10, fontWeight: 600, borderRadius: 4 }}>
-            {statusStyle.label}
-          </span>
-          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.mutedSoft, marginLeft: 'auto' }}>{ts}</span>
-        </div>
+      <div style={{ flex: 1, paddingBottom: isLast ? 0 : 22, opacity: gruppe.status === 'offen' ? 0.55 : 1 }}>
+        {/* Name + Status + Uhrzeit. D4: Sammelstand über die Varianten — auf dem
+            Handy als eigene Zeile, sonst zerbricht der Schrittname in drei Zeilen. */}
+        {(() => {
+          const bilanz = mehrere && (
+            <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>
+              {gruppe.fertig}/{gruppe.gesamt} fertig
+              {gruppe.fehler ? ` · ${gruppe.fehler} Fehler` : ''}
+              {gruppe.haenger ? ` · ${gruppe.haenger} hängt` : ''}
+              {gruppe.uebersprungen ? ` · ${gruppe.uebersprungen} übersprungen` : ''}
+            </span>
+          );
+          return (
+            <div style={{ marginBottom: hatInhalt ? 6 : 0 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <span style={{ fontSize: 13, fontWeight: 600, color: gruppe.status === 'offen' ? T.muted : T.ink }}>
+                  {STEP_LABELS[gruppe.step] || gruppe.step}
+                </span>
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 4, padding: '2px 8px',
+                  background: statusStyle.bg, color: statusStyle.fg,
+                  fontFamily: T.mono, fontSize: 10, fontWeight: 600, borderRadius: 4, whiteSpace: 'nowrap' }}>
+                  {statusStyle.label}
+                </span>
+                {!mobile && bilanz}
+                <span style={{ fontFamily: T.mono, fontSize: 10, color: T.mutedSoft, marginLeft: 'auto', whiteSpace: 'nowrap' }}>{ts}</span>
+              </div>
+              {mobile && bilanz && <div style={{ marginTop: 3 }}>{bilanz}</div>}
+            </div>
+          );
+        })()}
 
-        {/* 1-2 sentence description */}
         {showDesc && (
-          <div style={{ fontSize: 12, color: T.mutedSoft, lineHeight: 1.55, marginBottom: step.detail ? 8 : 0 }}>
+          <div style={{ fontSize: 12, color: T.mutedSoft, lineHeight: 1.55, marginBottom: zeigeDetail || zeigeVarianten ? 8 : 0 }}>
             {desc}
           </div>
         )}
 
-        {/* Photo / image progress */}
-        {step.detail && progress ? (
+        {zeigeVarianten && <VariantenListe varianten={gruppe.varianten} />}
+
+        {/* Foto-/Bild-Fortschritt */}
+        {zeigeDetail && progress ? (
           <div>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 5 }}>
               <span style={{ fontFamily: T.mono, fontSize: 11.5, color: T.ink, fontWeight: 500 }}>
@@ -1413,14 +1828,16 @@ function StepRow({ step, isLast }) {
             </div>
             <div style={{ height: 5, background: T.surfaceAlt, borderRadius: 3, overflow: 'hidden' }}>
               <div style={{ height: '100%', width: `${(progress.current / progress.total) * 100}%`,
-                background: step.status === 'done' ? T.ok : T.accent,
+                background: gruppe.status === 'done' ? T.ok : T.accent,
                 borderRadius: 3, transition: 'width 0.4s ease' }} />
             </div>
-            {/* raw detail as subtitle */}
-            <div style={{ fontSize: 11, color: T.mutedSoft, fontFamily: T.mono, marginTop: 4 }}>{step.detail}</div>
+            <div style={{ fontSize: 11, color: T.mutedSoft, fontFamily: T.mono, marginTop: 4 }}>{gruppe.detail}</div>
           </div>
-        ) : step.detail ? (
-          <div style={{ fontSize: 12, color: T.muted, fontFamily: T.mono }}>{step.detail}</div>
+        ) : zeigeDetail ? (
+          <div style={{ fontSize: 12, fontFamily: T.mono,
+            color: gruppe.status === 'error' ? T.err : gruppe.status === 'haenger' ? T.warn : T.muted }}>
+            {gruppe.detail}
+          </div>
         ) : null}
       </div>
     </div>
@@ -1445,14 +1862,9 @@ function TabProgress({ steps, onRefresh, latestEtappe }) {
     return () => clearInterval(iv);
   }, [isRunning]);
 
-  const grouped = {};
-  steps.forEach(s => {
-    if (!grouped[s.step]) grouped[s.step] = [];
-    grouped[s.step].push(s);
-  });
-
-  // Letzte Zeile pro Step (done überschreibt running etc.)
-  const latest = Object.values(grouped).map(arr => arr[arr.length - 1]);
+  // D2/D3/D4/D8 — eine Gruppe pro Soll-Schritt, Varianten darunter. `tick` läuft
+  // im Sekundentakt und hält die Hänger-Erkennung (30 Min auf 'running') aktuell.
+  const gruppen = gruppiereSteps(steps, { jetzt: now });
 
   if (!isRunning) return (
     <Panel style={{ textAlign: 'center', padding: 48 }}>
@@ -1477,10 +1889,14 @@ function TabProgress({ steps, onRefresh, latestEtappe }) {
     </Panel>
   );
 
-  const lastStep = latest[latest.length - 1];
-  const doneCount = latest.filter(s => s.status === 'done').length;
-  const total = latest.length;
+  // D5: Fortschritt gegen die Soll-Liste, nicht gegen die Zahl der bisher
+  // gesehenen Namen — sonst steht der Balken schon bei 100 %, während die Hälfte
+  // der Pipeline noch aussteht. Übersprungene Schritte zählen als erledigt
+  // (personal_hook-Läufe überspringen z. B. map/selektor).
+  const doneCount = gruppen.filter(g => g.status === 'done' || g.status === 'skipped').length;
+  const total = gruppen.length;
   const pct = total ? Math.round((doneCount / total) * 100) : 0;
+  const fehlerhaft = gruppen.filter(g => g.status === 'error' || g.status === 'haenger');
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
@@ -1514,11 +1930,25 @@ function TabProgress({ steps, onRefresh, latestEtappe }) {
               background: `linear-gradient(90deg, ${T.accent}, ${T.accentDeep})`,
               borderRadius: 4, transition: 'width 0.4s ease' }} />
           </div>
+          {/* Fehler stehen sonst weiter unten in der Liste und gehen im Scrollen unter. */}
+          {fehlerhaft.length > 0 && (
+            <div style={{ marginTop: 10, padding: '8px 12px', background: T.errSoft, borderRadius: 7,
+              borderLeft: `3px solid ${T.err}`, fontSize: 12, color: T.err }}>
+              {fehlerhaft.map(g => {
+                const name = STEP_LABELS[g.step] || g.step;
+                const teile = [
+                  g.fehler  ? `${g.fehler} Fehler` : null,
+                  g.haenger ? `${g.haenger} hängt` : null,
+                ].filter(Boolean).join(', ');
+                return g.gesamt > 1 ? `${name} (${teile} von ${g.gesamt})` : `${name} — ${teile}`;
+              }).join(' · ')}
+            </div>
+          )}
         </div>
 
         <div>
-          {latest.map((s, i) => (
-            <StepRow key={`${s.step}-${i}`} step={s} isLast={i === latest.length - 1} />
+          {gruppen.map((g, i) => (
+            <StepRow key={g.step} gruppe={g} isLast={i === gruppen.length - 1} />
           ))}
         </div>
       </Panel>
@@ -1529,11 +1959,7 @@ function TabProgress({ steps, onRefresh, latestEtappe }) {
 // ─── Image card (inline, for Style Review tab) ──────────────────────────────────────
 function ImageCardInline({ foto }) {
   const [state, setState] = React.useState('loading');
-  const imgSrc = foto.bildgen_url
-    ? foto.bildgen_url
-    : foto.bildgen_datei
-      ? 'file://' + foto.bildgen_datei.split('/').map(seg => encodeURIComponent(seg)).join('/')
-      : null;
+  const imgSrc = foto.bildgen_url || null;
 
   return (
     <div style={{ borderRadius: 10, overflow: 'hidden', background: T.surfaceAlt,
@@ -1827,11 +2253,8 @@ function skPickSpread(arr, n) {
   }
   return out;
 }
-function skFileUrl(p) {
-  return 'file://' + p.split('/').map(encodeURIComponent).join('/');
-}
-
 function TabStilKatalog() {
+  const mobile = useMobile();
   const [stile, setStile]           = React.useState(_skCache ? _skCache.stile : []);
   const [images, setImages]         = React.useState(_skCache ? _skCache.images : {});
   const [loading, setLoading]       = React.useState(!_skCache);
@@ -1843,6 +2266,7 @@ function TabStilKatalog() {
   const [lb, setLb]                 = React.useState(null);   // { list, idx }
   const [gallery, setGallery]       = React.useState(null);   // { styleId }
   const [expandedDescs, setExpandedDescs] = React.useState({});
+  const [filtersOpen, setFiltersOpen] = React.useState(false);
   const toastTimer = React.useRef(null);
 
   React.useEffect(() => {
@@ -1850,9 +2274,8 @@ function TabStilKatalog() {
     const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
     Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/stile?select=*&order=name`, { headers: h }).then(r => r.json()),
-      fetch(`${SUPABASE_URL}/rest/v1/fotos?select=tagesstil,bildgen_url,foto_nr&bildgen_url=not.is.null&order=foto_nr&limit=3000`, { headers: h }).then(r => r.json()),
-      fetch(`${SUPABASE_URL}/rest/v1/fotos?select=tagesstil,bildgen_datei,foto_nr&bildgen_datei=not.is.null&bildgen_url=is.null&order=foto_nr&limit=3000`, { headers: h }).then(r => r.json()),
-    ]).then(([stileRows, urlRows, localRows]) => {
+      fetchAll('fotos?select=tagesstil,bildgen_url,foto_nr&bildgen_url=not.is.null&order=foto_nr'),
+    ]).then(([stileRows, urlRows]) => {
       const imgs = {};
       const add = (style, src) => {
         if (!style || !src) return;
@@ -1861,7 +2284,6 @@ function TabStilKatalog() {
       };
       stileRows.forEach(s => { if (Array.isArray(s.review_bilder)) s.review_bilder.forEach(u => add(s.name, u)); });
       urlRows.forEach(r => add(r.tagesstil, r.bildgen_url));
-      localRows.forEach(r => add(r.tagesstil, skFileUrl(r.bildgen_datei)));
       _skCache = { stile: stileRows, images: imgs };
       setStile(stileRows);
       setImages(imgs);
@@ -1889,7 +2311,7 @@ function TabStilKatalog() {
       await skPatch(id, body);
       const updated = stile.map(x => x.id === id ? { ...x, ...body } : x);
       setStile(updated);
-      if (_skCache) _skCache.stile = updated;
+      _skCache = null;
       showToast(`✓ ${s.name} → ${key === 'reset' ? 'Reset' : SK_RATINGS[key].label}`, T.okSoft);
     } catch (e) { showToast(`❌ Fehler: ${e.message}`, T.errSoft); }
   }, [stile, skPatch, showToast]);
@@ -1902,7 +2324,7 @@ function TabStilKatalog() {
       await skPatch(id, { favorit: next });
       const updated = stile.map(x => x.id === id ? { ...x, favorit: next } : x);
       setStile(updated);
-      if (_skCache) _skCache.stile = updated;
+      _skCache = null;
       showToast(`${next ? '★' : '☆'} ${s.name} → Favorit ${next ? 'an' : 'aus'}`, '#fdeef5');
     } catch (e) { showToast(`❌ Fehler: ${e.message}`, T.errSoft); }
   }, [stile, skPatch, showToast]);
@@ -1922,10 +2344,11 @@ function TabStilKatalog() {
   }, [lb, gallery]);
 
   const counts = React.useMemo(() => {
-    const c = { alle: stile.length, unbewertet: 0, top: 0, gut: 0, mittel: 0, raus: 0, fav: 0 };
-    stile.forEach(s => { c[skStateOf(s)]++; if (s.favorit) c.fav++; });
+    const inCat = activeCat === 'alle' ? stile : stile.filter(s => (s.kategorie || '—') === activeCat);
+    const c = { alle: inCat.length, unbewertet: 0, top: 0, gut: 0, mittel: 0, raus: 0, fav: 0 };
+    inCat.forEach(s => { c[skStateOf(s)]++; if (s.favorit) c.fav++; });
     return c;
-  }, [stile]);
+  }, [stile, activeCat]);
 
   const catCounts = React.useMemo(() => {
     const c = {};
@@ -1959,9 +2382,9 @@ function TabStilKatalog() {
   return (
     <div style={{ display: 'flex', flexDirection: 'column', height: '100%', overflow: 'hidden' }}>
       {/* Filter bar */}
-      <div style={{ padding: '10px 28px', borderBottom: `1px solid ${T.border}`, background: T.surface, flexShrink: 0 }}>
+      <div style={{ padding: mobile ? '8px 12px' : '10px 28px', borderBottom: `1px solid ${T.border}`, background: T.surface, flexShrink: 0 }}>
         <div style={{ display: 'flex', flexDirection: 'column', gap: 4 }}>
-          <div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
             <select value={sort} onChange={e => setSort(e.target.value)}
               style={{ fontFamily: T.sans, fontSize: 12, padding: '4px 8px', border: `1px solid ${T.border}`, borderRadius: 7, background: T.surface, color: T.ink, cursor: 'pointer' }}>
               <option value="rating">Bewertung</option>
@@ -1969,22 +2392,33 @@ function TabStilKatalog() {
               <option value="used">Meist genutzt</option>
               <option value="recent">Zuletzt genutzt</option>
             </select>
+            {mobile && (
+              <button onClick={() => setFiltersOpen(p => !p)}
+                style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 7, border: `1px solid ${T.border}`, background: filtersOpen ? T.accentSoft : T.surface, color: filtersOpen ? T.accentInk : T.muted, cursor: 'pointer' }}>
+                Filter {filtersOpen ? '▲' : '▼'}
+                {(activeStatus !== 'alle' || activeCat !== 'alle') && !filtersOpen ? ' •' : ''}
+              </button>
+            )}
           </div>
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            {STATUS_DEFS.map(([k, lbl]) => (
-              <div key={k} className={`sk-chip${activeStatus === k ? ' active' : ''}`} onClick={() => setActiveStatus(k)}>
-                {lbl}<span style={{ opacity: activeStatus === k ? 0.85 : 0.6, marginLeft: 3, fontVariantNumeric: 'tabular-nums' }}>{counts[k] ?? 0}</span>
+          {(!mobile || filtersOpen) && (
+            <>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                {STATUS_DEFS.map(([k, lbl]) => (
+                  <div key={k} className={`sk-chip${activeStatus === k ? ' active' : ''}`} onClick={() => setActiveStatus(k)}>
+                    {lbl}<span style={{ opacity: activeStatus === k ? 0.85 : 0.6, marginLeft: 3, fontVariantNumeric: 'tabular-nums' }}>{counts[k] ?? 0}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
-          <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-            <div className={`sk-chip${activeCat === 'alle' ? ' active' : ''}`} onClick={() => setActiveCat('alle')}>Alle Kategorien</div>
-            {cats.map(k => (
-              <div key={k} className={`sk-chip${activeCat === k ? ' active' : ''}`} onClick={() => setActiveCat(k)}>
-                {k}<span style={{ opacity: activeCat === k ? 0.85 : 0.6, marginLeft: 3, fontVariantNumeric: 'tabular-nums' }}>{catCounts[k]}</span>
+              <div style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
+                <div className={`sk-chip${activeCat === 'alle' ? ' active' : ''}`} onClick={() => setActiveCat('alle')}>Alle Kategorien</div>
+                {cats.map(k => (
+                  <div key={k} className={`sk-chip${activeCat === k ? ' active' : ''}`} onClick={() => setActiveCat(k)}>
+                    {k}<span style={{ opacity: activeCat === k ? 0.85 : 0.6, marginLeft: 3, fontVariantNumeric: 'tabular-nums' }}>{catCounts[k]}</span>
+                  </div>
+                ))}
               </div>
-            ))}
-          </div>
+            </>
+          )}
           <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, paddingTop: 2 }}>
             {loading ? 'Lade …' : `${stile.length} Stile · ${counts.top + counts.gut + counts.mittel} bewertet · ${counts.unbewertet} offen · ${counts.raus} raus`}
           </span>
@@ -1992,7 +2426,7 @@ function TabStilKatalog() {
       </div>
 
       {/* List */}
-      <div style={{ flex: 1, overflow: 'auto', padding: '8px 28px 80px' }}>
+      <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '8px 12px 80px' : '8px 28px 80px' }}>
         {loading && <div style={{ padding: 60, textAlign: 'center', color: T.muted, fontFamily: T.sans }}>Lade Styles aus Supabase …</div>}
         {error   && <div style={{ padding: 60, textAlign: 'center', color: T.err,  fontFamily: T.sans }}>❌ {error}</div>}
         {!loading && !error && !visible.length && <div style={{ padding: 60, textAlign: 'center', color: T.muted, fontFamily: T.sans }}>Keine Styles in diesem Filter.</div>}
@@ -2004,9 +2438,9 @@ function TabStilKatalog() {
             ? `${s.mal_benutzt}× genutzt${s.zuletzt_benutzt ? ' · ' + s.zuletzt_benutzt : ''}`
             : 'nie genutzt';
           return (
-            <div key={s.id} className="sk-row">
+            <div key={s.id} className="sk-row" style={mobile ? { flexDirection: 'column', gap: 12, padding: 12 } : undefined}>
               {/* Info */}
-              <div style={{ width: 250, flexShrink: 0 }}>
+              <div style={{ width: mobile ? '100%' : 250, flexShrink: 0 }}>
                 <div className="sk-name" onClick={() => setGallery({ styleId: s.id })} title="Alle Bilder ansehen">{s.name}</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 9 }}>
                   {s.kategorie && <span style={{ fontFamily: T.mono, fontSize: '0.68rem', padding: '2px 7px', borderRadius: 5, background: T.accentSoft, color: T.accentInk, fontWeight: 600 }}>{s.kategorie}</span>}
@@ -2023,17 +2457,18 @@ function TabStilKatalog() {
                 )}
               </div>
               {/* Images */}
-              <div style={{ display: 'flex', gap: 8, flexGrow: 1, overflowX: 'auto', background: T.surfaceAlt, borderRadius: 9, padding: 8, alignItems: 'center', minHeight: 160 }}>
+              <div style={{ display: 'flex', gap: 8, flexGrow: 1, overflowX: 'auto', background: T.surfaceAlt, borderRadius: 9, padding: 8, alignItems: 'center', minHeight: mobile ? '28vw' : 160, width: mobile ? '100%' : undefined }}>
                 {imgs.length === 0
                   ? <div style={{ color: T.mutedSoft, fontStyle: 'italic', fontSize: '0.82rem', width: '100%', textAlign: 'center', fontFamily: T.sans }}>Noch keine Bilder generiert</div>
                   : <>
                       {preview.map(p => (
                         <img key={p.i} loading="lazy" src={p.u} onError={e => e.target.style.display = 'none'}
-                          style={{ height: 200, borderRadius: 6, boxShadow: '0 1px 5px rgba(0,0,0,0.1)', cursor: 'zoom-in', flexShrink: 0 }}
+                          style={{ height: mobile ? '28vw' : 200, borderRadius: 6, boxShadow: '0 1px 5px rgba(0,0,0,0.1)', cursor: 'zoom-in', flexShrink: 0 }}
                           onClick={() => setLb({ list: imgs, idx: p.i })} />
                       ))}
                       {imgs.length > preview.length && (
-                        <div className="sk-img-more" onClick={() => setGallery({ styleId: s.id })}>
+                        <div className="sk-img-more" onClick={() => setGallery({ styleId: s.id })}
+                          style={mobile ? { height: '28vw' } : undefined}>
                           +{imgs.length - preview.length} mehr
                         </div>
                       )}
@@ -2041,7 +2476,7 @@ function TabStilKatalog() {
                 }
               </div>
               {/* Rating */}
-              <div style={{ width: 160, flexShrink: 0, display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6, alignContent: 'start' }}>
+              <div style={{ width: mobile ? '100%' : 160, flexShrink: 0, display: 'grid', gridTemplateColumns: mobile ? '1fr 1fr 1fr 1fr' : '1fr 1fr', gap: 6, alignContent: 'start' }}>
                 {SK_ORDER.map(k => {
                   const r = SK_RATINGS[k];
                   return (
@@ -2169,7 +2604,7 @@ function MonologListeItem({ e, aktiv, hideKuerzel, onPick }) {
 
 function MonologPanel() {
   const mobile = useMobile();
-  const [datum, setDatum] = React.useState(new Date().toISOString().slice(0,10));
+  const [datum, setDatum] = React.useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Vienna' }).format(new Date()));
   const [text, setText] = React.useState('');
   const [status, setStatus] = React.useState(null);
   const [laden, setLaden] = React.useState(false);
@@ -2367,7 +2802,7 @@ function MonologPanel() {
             Keine Monologe auf {activeRoute}.
           </div>
         )}
-        <div style={{ maxHeight: mobile ? 'none' : 'calc(100vh - 180px)', overflowY: 'auto', marginRight: mobile ? 0 : -6, paddingRight: mobile ? 0 : 6 }}>
+        <div style={{ maxHeight: mobile ? 'none' : 'calc(100dvh - 180px)', overflowY: 'auto', marginRight: mobile ? 0 : -6, paddingRight: mobile ? 0 : 6 }}>
           {gefiltert.map(e => (
             <MonologListeItem key={e.id || e.datum} e={e} aktiv={e.datum === datum} hideKuerzel={activeRoute !== null} onPick={pick} />
           ))}
@@ -2380,7 +2815,7 @@ function MonologPanel() {
 // ─── HITL #1 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl1() {
   const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,startort,zielort,reel_varianten,hitl_prio_stil,hitl1_benachrichtigt_um,hitl1_entschieden_um';
-  const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&hitl1_benachrichtigt_um=not.is.null&hitl1_entschieden_um=is.null&order=datum.desc&limit=10`;
+  const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=${cols}&hitl1_benachrichtigt_um=not.is.null&hitl1_entschieden_um=is.null&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
   return res.json();
@@ -2391,7 +2826,7 @@ async function fetchEtappenFuerHitl1() {
 async function fetchEtappenHistorie() {
   const cols = 'id,datum,etappen_nr,tag_nr,tagesueberschrift,reel_varianten,hitl_prio_stil,'
     + 'hitl1_entschieden_um,route:routen(name,kuerzel)';
-  const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&reel_varianten=not.is.null&order=datum.desc&limit=30`;
+  const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=${cols}&reel_varianten=not.is.null&order=datum.desc&limit=30`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
   return res.json();
@@ -2413,9 +2848,7 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
   const [zielort, setZielort] = React.useState(etappe.zielort || '');
 
   // Verfügbare Varianten aus reel_varianten (enthält Narrator-Texte aller Stile)
-  const varianten = React.useMemo(() => {
-    try { return JSON.parse(etappe.reel_varianten || '[]'); } catch { return []; }
-  }, [etappe.reel_varianten]);
+  const varianten = React.useMemo(() => parseReelVarianten(etappe.reel_varianten), [etappe.reel_varianten]);
 
   const alleStile = varianten.length > 0 ? varianten.map(v => v.stil) : HITL1_STILE;
 
@@ -2474,7 +2907,7 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
           <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: 0, color: T.ink }}>
-            Narrator-Check — Tag {etappe.etappen_nr} ({etappe.datum})
+            Narrator-Check — Tag {etappe.tag_nr || etappe.etappen_nr} ({etappe.datum})
           </h2>
           {bereitsEntschieden && <span style={{ fontSize: 12, color: T.ok, fontFamily: T.mono }}>✓ Bereits freigegeben</span>}
         </div>
@@ -2553,9 +2986,7 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
 // Read-only-Ansicht eines vergangenen Tages aus dem Archiv — zeigt alle gespeicherten
 // Stil-Texte + damaligen Kommentar + welcher Stil Prio war, ohne etwas editierbar zu machen.
 function Hitl1HistorieViewer({ etappe, onClose }) {
-  const varianten = React.useMemo(() => {
-    try { return JSON.parse(etappe.reel_varianten || '[]'); } catch { return []; }
-  }, [etappe.reel_varianten]);
+  const varianten = React.useMemo(() => parseReelVarianten(etappe.reel_varianten), [etappe.reel_varianten]);
   const entschieden = !!etappe.hitl1_entschieden_um;
 
   return (
@@ -2563,7 +2994,7 @@ function Hitl1HistorieViewer({ etappe, onClose }) {
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 16 }}>
         <div>
           <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: 0, color: T.ink }}>
-            Archiv — Tag {etappe.etappen_nr} ({fmtDatumDE(etappe.datum)})
+            Archiv — Tag {etappe.tag_nr || etappe.etappen_nr} ({fmtDatumDE(etappe.datum)})
           </h2>
           <span style={{ fontSize: 12, color: entschieden ? T.ok : T.muted, fontFamily: T.mono }}>
             {entschieden ? '✓ Damals entschieden' : '– Kein HITL #1 nötig gewesen'}
@@ -2674,7 +3105,7 @@ function TabHitl1() {
           Noch keine Tage mit Narrator-Texten.
         </div>
       )}
-      <div style={{ maxHeight: mobile ? 'none' : 'calc(100vh - 260px)', overflowY: 'auto', marginRight: mobile ? 0 : -6, paddingRight: mobile ? 0 : 6 }}>
+      <div style={{ maxHeight: mobile ? 'none' : 'calc(100dvh - 260px)', overflowY: 'auto', marginRight: mobile ? 0 : -6, paddingRight: mobile ? 0 : 6 }}>
         {gefiltert.map(e => (
           <MonologListeItem key={e.id} e={e} aktiv={ausgewaehlt?.id === e.id} hideKuerzel={activeRoute !== null} onPick={setAusgewaehlt} />
         ))}
@@ -2694,8 +3125,8 @@ function TabHitl1() {
 
 // ─── HITL #2 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl2() {
-  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,post_geplant_um,veto,freigabe,reel_varianten';
-  const url = `${SUPABASE_URL}/rest/v1/etappen?select=${cols}&pipeline_status=eq.reel_freigabe&order=datum.desc&limit=10`;
+  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,post_geplant_um,veto,freigabe,reel_varianten,hitl_prio_stil';
+  const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=${cols}&pipeline_status=eq.reel_freigabe&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
   return res.json();
@@ -2712,13 +3143,11 @@ function Hitl2Veto({ etappe, onVeto }) {
     return () => clearInterval(iv);
   }, []);
 
-  const offen = ziel && ziel > now && !etappe.veto && !etappe.freigabe;
+  const offen = (!ziel || ziel > now) && !etappe.veto && !etappe.freigabe;
   const verbleibend = ziel ? Math.max(0, Math.round((ziel - now) / 60000)) : null;
 
-  const varianten = (() => {
-    try { return JSON.parse(etappe.reel_varianten || '[]'); } catch { return []; }
-  })();
-  const prioVariante = varianten[0];
+  const varianten = parseReelVarianten(etappe.reel_varianten);
+  const prioVariante = varianten.find(v => v.stil === etappe.hitl_prio_stil) || varianten[0];
 
   const isPreview = etappe.id === '__preview__';
 
@@ -2742,7 +3171,7 @@ function Hitl2Veto({ etappe, onVeto }) {
   return (
     <div style={{ maxWidth: 540, background: T.surface, borderRadius: 12, border: `2px solid ${offen ? T.accent : T.border}`, padding: 24, marginBottom: 20, opacity: isPreview ? 0.6 : 1 }}>
       <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: '0 0 8px', color: T.ink }}>
-        Prio-Reel bereit — Tag {etappe.etappen_nr} ({etappe.datum})
+        Prio-Reel bereit — Tag {etappe.tag_nr || etappe.etappen_nr} ({etappe.datum})
       </h2>
 
       {prioVariante && (
@@ -2773,8 +3202,14 @@ function Hitl2Veto({ etappe, onVeto }) {
       ) : offen ? (
         <div>
           <div style={{ background: T.warnSoft, border: `1px solid ${T.warn}`, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontFamily: T.sans }}>
-            <b style={{ color: T.warn }}>Geht raus um {ziel.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</b>
-            {verbleibend !== null && <span style={{ color: T.muted }}> — noch {verbleibend} Min</span>}
+            {ziel ? (
+              <React.Fragment>
+                <b style={{ color: T.warn }}>Geht raus um {ziel.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</b>
+                {verbleibend !== null && <span style={{ color: T.muted }}> — noch {verbleibend} Min</span>}
+              </React.Fragment>
+            ) : (
+              <b style={{ color: T.warn }}>Kein Zieldatum gesetzt — wartet auf Freigabe oder Veto</b>
+            )}
           </div>
           <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
             <button onClick={setzeFreigabe} disabled={saving || isPreview}
@@ -2844,7 +3279,9 @@ function TabHitl2() {
 
 // Je Reel zählt der jüngste Snapshot — '24h' und 'final' nebeneinander zu mitteln
 // würde Reels unterschiedlichen Alters gegeneinander verrechnen.
-const HORIZON_RANG = { '24h': 1, '72h': 2, '7d': 3, 'final': 4 };
+// 'final' steht bewusst ÜBER '90d': ein Reel mit 'final'-Snapshot von vor der
+// 30d/90d-Einführung (D5) ist trotzdem der spätere Stand als ein frisches 90d.
+const HORIZON_RANG = { '24h': 1, '72h': 2, '7d': 3, '30d': 4, '90d': 5, 'final': 6 };
 
 function juengsteSnapshots(rows) {
   const beste = new Map();
@@ -2857,9 +3294,21 @@ function juengsteSnapshots(rows) {
 }
 
 const mittel = (arr, feld) => {
-  const werte = arr.map(a => a[feld]).filter(v => v !== null && v !== undefined);
+  const werte = arr.map(a => a[feld]).filter(v => v !== null && v !== undefined).map(Number);
   return werte.length ? werte.reduce((s, v) => s + v, 0) / werte.length : null;
 };
+
+// Auf welchem Stand verglichen wird: dem mit den meisten Reels. Views wachsen mit
+// dem Alter — '72h' gegen 'final' zu mitteln misst mit, welcher Stil zufällig die
+// älteren Posts hat. Bei Gleichstand gewinnt der spätere Horizont.
+function vergleichsHorizont(rows) {
+  const zaehler = {};
+  for (const r of rows) if (r.platform === 'instagram') zaehler[r.horizon] = (zaehler[r.horizon] || 0) + 1;
+  const kandidaten = Object.keys(zaehler);
+  if (!kandidaten.length) return null;
+  return kandidaten.sort((a, b) =>
+    (zaehler[b] - zaehler[a]) || ((HORIZON_RANG[b] || 0) - (HORIZON_RANG[a] || 0)))[0];
+}
 
 // Ein Balken zeigt Größe, nicht Identität — deshalb durchgängig der Akzent-Ton
 // und der Name als Text daneben. Fünf Stil-Farben würden Zugehörigkeit behaupten,
@@ -2880,126 +3329,203 @@ function ReelBar({ label, sub, value, maxValue, detail }) {
   );
 }
 
-function TabReels() {
+// E2b/c/d/e: eine Zeile pro Variante mit allen Kennzahlen (Views, Reach, Retention,
+// Watch-Time Ø + Σ, Likes, Kommentare, Saves, Shares) statt nur einem Balken mit
+// dem Rest im Hover-Tooltip. YouTube liefert laut insights_poller.py (videos.list)
+// nur views/likes/comments — die übrigen Felder zeigen "liefert die API nicht"
+// statt einer irreführenden 0 (E2c). Der Horizont-Verlauf (E2e) steht darunter.
+function ReelVarianteRow({ r, feld, maxWert, historie }) {
+  const yt = r.platform !== 'instagram';
+  const fmtNum = v => v != null ? Math.round(Number(v)).toLocaleString('de-DE') : (yt ? 'liefert die API nicht' : '–');
+  const fmtPct = v => v != null ? `${Number(v).toFixed(1)}%` : (yt ? 'liefert die API nicht' : '–');
+  const fmtWatch = v => v != null ? `${Math.round(Number(v))}s` : (yt ? 'liefert die API nicht' : '–');
+  const felder = [
+    { label: 'Views',        val: fmtNum(r.views) },
+    { label: 'Reach',        val: fmtNum(r.reach) },
+    { label: 'Retention',    val: fmtPct(r.retention_pct) },
+    { label: 'Watch-Time Ø', val: fmtWatch(r.watch_time_avg_sec) },
+    // E2d: watch_time_total_sec als zweite Leitgröße neben Retention — bisher
+    // gar nicht abgefragt, obwohl reel_metrics die Spalte längst führt.
+    { label: 'Watch-Time Σ', val: r.watch_time_total_sec != null ? fmtDur(Number(r.watch_time_total_sec)) : (yt ? 'liefert die API nicht' : '–') },
+    { label: 'Likes',        val: fmtNum(r.likes) },
+    { label: 'Kommentare',   val: fmtNum(r.comments) },
+    { label: 'Saves',        val: fmtNum(r.saves) },
+    { label: 'Shares',       val: fmtNum(r.shares) },
+  ];
+  const value = Number(r[feld]) || 0;
+  const sub = feld === 'retention_pct'
+    ? `${fmtPct(r.retention_pct)}${r.dauer_s ? ` · ${Math.round(r.dauer_s)}s` : ''} · ${r.horizon}`
+    : `${fmtNum(r.views)} Views · ${r.horizon}`;
+  return (
+    <div style={{ padding: 14, background: T.surfaceAlt, borderRadius: 10 }}>
+      <ReelBar label={`${r.variante || '?'}${yt ? ` · ${r.platform}` : ''}`} value={value} maxValue={maxWert} sub={sub} />
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(100px, 1fr))', gap: 10, marginTop: 12 }}>
+        {felder.map(f => (
+          <div key={f.label}>
+            <div style={{ fontSize: 10, color: T.mutedSoft, marginBottom: 2 }}>{f.label}</div>
+            <div style={{ fontFamily: T.mono, fontSize: 11.5, color: T.ink, fontWeight: 500 }}>{f.val}</div>
+          </div>
+        ))}
+      </div>
+      {historie.length > 1 && (
+        <div style={{ marginTop: 12, paddingTop: 10, borderTop: `1px solid ${T.border}`, display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+          {historie.map(h => (
+            <div key={h.horizon}>
+              <div style={{ fontFamily: T.mono, fontSize: 9, fontWeight: h.horizon === r.horizon ? 700 : 500,
+                color: h.horizon === r.horizon ? T.accentInk : T.mutedSoft, textTransform: 'uppercase' }}>{h.horizon}</div>
+              <div style={{ fontFamily: T.mono, fontSize: 11, color: T.ink }}>{h.views ?? '–'}</div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ─── Tab: Reels (Reichweite der Varianten der gewählten Etappe) ───────────────
+// E2a: TabReels() nahm bis zum Umbau keine Props entgegen und ignorierte damit
+// selectedEtappe komplett — der Tab zeigte immer den globalen Schnitt über alle
+// Etappen. Jetzt zeigt er die gewählte Etappe, der globale Stil-Schnitt bleibt als
+// Einordnungszeile (E2f).
+function TabReels({ data, selectedEtappe }) {
   const mobile = useMobile();
   const [rows, setRows] = useState(null);
   const [fehler, setFehler] = useState(null);
   const [tage, setTage] = useState(30);
+  const [mass, setMass] = useState('retention');
+  // I1: Account-Basislinie (Follower/Reach/Views), unabhängig von den Reel-Snapshots.
+  const [accountInsights, setAccountInsights] = useState(null);
 
   React.useEffect(() => {
     fetchReelMetrics().then(setRows).catch(e => setFehler(e.message));
+    fetchAccountInsights().then(setAccountInsights).catch(() => setAccountInsights([]));
   }, []);
 
   if (fehler) return <Panel><div style={{ color: T.err, fontSize: 13 }}>Fehler beim Laden: {fehler}</div></Panel>;
   if (!rows) return <Panel><div style={{ color: T.muted, fontSize: 13 }}>Lade Reel-Zahlen…</div></Panel>;
 
-  const grenze = Date.now() - tage * 864e5;
-  const aktuell = juengsteSnapshots(
-    rows.filter(r => r.etappe && (tage === 0 || new Date(r.posted_at).getTime() >= grenze))
-  );
-  const ig = aktuell.filter(r => r.platform === 'instagram');
-
-  // Schnitt je Stil
-  const stile = {};
-  for (const r of ig) (stile[r.variante || '?'] ||= []).push(r);
-  const stilListe = Object.entries(stile)
-    .map(([stil, gruppe]) => ({
-      stil, n: gruppe.length,
-      views: mittel(gruppe, 'views') || 0,
-      watch: mittel(gruppe, 'watch_time_avg_sec'),
-      reach: mittel(gruppe, 'reach') || 0,
-    }))
-    .sort((a, b) => b.views - a.views);
-  const maxStilViews = Math.max(...stilListe.map(s => s.views), 1);
-
-  // Etappen, neueste zuerst
-  const etappen = {};
-  for (const r of aktuell) (etappen[r.etappe_id] ||= []).push(r);
-  const etappenListe = Object.values(etappen).sort((a, b) =>
-    (b[0].etappe.datum || '').localeCompare(a[0].etappe.datum || ''));
-
-  const gesamtViews = mittel(ig, 'views');
-  const gesamtWatch = mittel(ig, 'watch_time_avg_sec');
-  const belastbar = stilListe.filter(s => s.n >= 5);
-
+  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
   const ZEITRAEUME = [[7, '7 Tage'], [30, '30 Tage'], [90, '90 Tage'], [0, 'Alles']];
+  const feld = mass === 'retention' ? 'retention_pct' : 'views';
+
+  // E2f: der globale Stil-Schnitt (früher das Hauptpanel des Tabs) ist jetzt nur
+  // noch Kontext — eine Einordnungszeile statt eigenem Balken-Panel pro Stil.
+  const grenze = Date.now() - tage * 864e5;
+  const imZeitraum = rows.filter(r => r.etappe && (tage === 0 || new Date(r.posted_at).getTime() >= grenze));
+  const horizont = vergleichsHorizont(imZeitraum);
+  const wertung = imZeitraum.filter(r => r.platform === 'instagram' && r.horizon === horizont);
+  const stile = {};
+  for (const r of wertung) (stile[r.variante || '?'] ||= []).push(r);
+  const stilRanking = Object.entries(stile)
+    .map(([stil, gruppe]) => ({ stil, n: gruppe.length,
+      views: mittel(gruppe, 'views') || 0, retention: mittel(gruppe, 'retention_pct') || 0 }))
+    .filter(s => s.n >= 5)
+    .sort((a, b) => b[mass] - a[mass]);
+  const zeitraumLabel = tage ? `letzte ${tage} Tage` : 'gesamter Zeitraum';
+  const einordnung = stilRanking.length
+    ? `Stil-Schnitt über alle Etappen (${zeitraumLabel}, nur Instagram, Stand ${horizont}, n≥5 pro Stil): `
+      + stilRanking.map(s => `${s.stil} ${mass === 'retention' ? s.retention.toFixed(1) + '%' : Math.round(s.views) + ' Views'} (n=${s.n})`).join(' · ')
+    : `Noch keine Stichprobe ab n=5 pro Stil (${zeitraumLabel}).`;
+
+  // E2b/c/e: alle Snapshots der gewählten Etappe, nach Variante+Plattform
+  // gruppiert. Der jüngste Snapshot je Kombination trägt die Kennzahlen, alle
+  // Snapshots zusammen den Horizont-Verlauf darunter.
+  const etappeSnapshots = curE ? rows.filter(r => r.etappe_id === curE.id) : [];
+  const aktuellEtappe = juengsteSnapshots(etappeSnapshots);
+  const historieFuer = r => etappeSnapshots
+    .filter(x => x.variante === r.variante && x.platform === r.platform)
+    .sort((a, b) => (HORIZON_RANG[a.horizon] || 0) - (HORIZON_RANG[b.horizon] || 0));
+  const sortNachMass = (a, b) => (Number(b[feld]) || 0) - (Number(a[feld]) || 0);
+  const igVarianten = aktuellEtappe.filter(r => r.platform === 'instagram').sort(sortNachMass);
+  const ytVarianten = aktuellEtappe.filter(r => r.platform !== 'instagram').sort(sortNachMass);
+  const maxWert = Math.max(...aktuellEtappe.map(r => Number(r[feld]) || 0), 1);
+
+  // Audit 02.08.: fünf Stile pro Etappe (original_images, selfie_first,
+  // ki_narrator, impact, song) — aber nur 5 von 12 jüngeren Etappen haben alle
+  // fünf erfasst. E2a: den dünnen Zustand ehrlich als "n von 5" zeigen statt eine
+  // vollständige Erhebung vorzutäuschen.
+  const REEL_STILE_SOLL = 5;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
-        {ZEITRAEUME.map(([t, label]) => (
-          <button key={t} onClick={() => setTage(t)}
-            className={`sk-chip${tage === t ? ' active' : ''}`}>{label}</button>
-        ))}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(4, 1fr)', gap: 14 }}>
-        <KPI icon={IActivity} label="Reels erfasst" value={aktuell.length || '–'}
-          sub={`${ig.length} auf Instagram`} />
-        <KPI icon={ITrendUp} label="Ø Views" value={gesamtViews ? Math.round(gesamtViews) : '–'}
-          sub={tage ? `letzte ${tage} Tage` : 'gesamter Zeitraum'} />
-        <KPI icon={IClock} label="Ø Watch-Time" value={gesamtWatch ? `${gesamtWatch.toFixed(1)}s` : '–'}
-          sub="pro Aufruf" />
-        <KPI icon={ISparkles} label="Vorn" value={belastbar.length ? belastbar[0].stil : '–'}
-          sub={belastbar.length ? `${Math.round(belastbar[0].views)} Ø Views · n=${belastbar[0].n}`
-                                : 'noch keine Stichprobe ab n=5'} />
-      </div>
-
-      <Panel>
-        <PanelHeader icon={IGauge} label="Schnitt je Stil" serif="Nur Instagram"
-          right={<div style={{ textAlign: 'right' }}>
-            <div style={{ fontFamily: T.serif, fontSize: 24, fontWeight: 400, letterSpacing: -0.3 }}>{ig.length}</div>
-            <div style={{ fontSize: 10, color: T.muted, fontFamily: T.mono }}>Reels in der Wertung</div>
-          </div>} />
-        {stilListe.length === 0
-          ? <div style={{ color: T.muted, fontSize: 13 }}>Keine Snapshots in diesem Zeitraum.</div>
-          : <div style={{ display: 'flex', flexDirection: 'column', gap: 13 }}>
-              {stilListe.map(s => (
-                <ReelBar key={s.stil} label={s.stil} value={s.views} maxValue={maxStilViews}
-                  sub={`${Math.round(s.views)} Views · n=${s.n}${s.watch ? ` · ${s.watch.toFixed(1)}s` : ''}`}
-                  detail={`Ø Reach ${Math.round(s.reach)} · Ø Watch-Time ${s.watch ? s.watch.toFixed(1) + 's' : '–'}`} />
-              ))}
-            </div>}
-        <div style={{ marginTop: 14, fontSize: 11, color: T.mutedSoft, fontFamily: T.sans }}>
-          Reihenfolge ist erst ab n≈5 pro Stil ein Hinweis — darunter Rauschen.
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'space-between' }}>
+        <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+          {ZEITRAEUME.map(([t, label]) => (
+            <button key={t} onClick={() => setTage(t)}
+              className={`sk-chip${tage === t ? ' active' : ''}`}>{label}</button>
+          ))}
         </div>
-      </Panel>
+        <div style={{ display: 'flex', gap: 6 }}>
+          {[['retention', 'Retention'], ['views', 'Views']].map(([m, label]) => (
+            <button key={m} onClick={() => setMass(m)}
+              className={`sk-chip${mass === m ? ' active' : ''}`}>{label}</button>
+          ))}
+        </div>
+      </div>
 
-      <Panel>
-        <PanelHeader icon={IImage} label="Varianten je Etappe" serif="Der eigentliche A/B-Vergleich" />
-        {etappenListe.length === 0
-          ? <div style={{ color: T.muted, fontSize: 13 }}>Keine Snapshots in diesem Zeitraum.</div>
-          : <div style={{ display: 'flex', flexDirection: 'column', gap: 22 }}>
-              {etappenListe.map(gruppe => {
-                const e = gruppe[0].etappe;
-                const maxViews = Math.max(...gruppe.map(r => r.views || 0), 1);
-                const strecke = [e.startort, e.zielort].filter(Boolean).join(' – ');
-                return (
-                  <div key={gruppe[0].etappe_id}>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 10, flexWrap: 'wrap' }}>
-                      <span style={{ fontFamily: T.serif, fontSize: 17, color: T.ink }}>Tag {e.tag_nr}</span>
-                      {e.run > 1 && (
-                        <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 600, padding: '2px 6px',
-                          borderRadius: 4, background: T.accentSoft, color: T.accentInk }}>RUN {e.run}</span>
-                      )}
-                      <span style={{ fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>{e.datum}</span>
-                      {strecke && <span style={{ fontSize: 12, color: T.muted }}>{strecke}</span>}
-                    </div>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: 11 }}>
-                      {gruppe.sort((a, b) => (b.views || 0) - (a.views || 0)).map(r => (
-                        <ReelBar key={`${r.variante}|${r.platform}`}
-                          label={`${r.variante || '?'}${r.platform !== 'instagram' ? ` · ${r.platform}` : ''}`}
-                          value={r.views || 0} maxValue={maxViews}
-                          sub={`${r.views ?? '–'} Views${r.watch_time_avg_sec ? ` · ${r.watch_time_avg_sec.toFixed(1)}s` : ''}`}
-                          detail={`Reach ${r.reach ?? '–'} · Saves ${r.saves ?? '–'} · Likes ${r.likes ?? '–'} · `
-                                + `Shares ${r.shares ?? '–'} · Stand ${r.horizon}`} />
-                      ))}
-                    </div>
-                  </div>
-                );
-              })}
-            </div>}
-      </Panel>
+      {/* I1: Account-Basislinie — letzter Tages-Snapshot aus account_insights,
+          reiner Kontext (nicht etappenbezogen). */}
+      {accountInsights && accountInsights.length > 0 && (() => {
+        const neuester = accountInsights[0];
+        return (
+          <div style={{ fontSize: 11, color: T.mutedSoft, fontFamily: T.mono, padding: '2px 4px' }}>
+            Account {neuester.tag}: {neuester.followers_count ?? '–'} Follower ·
+            {' '}{neuester.reach ?? '–'} Reach · {neuester.views ?? '–'} Views
+          </div>
+        );
+      })()}
+
+      {!curE ? (
+        <Panel><div style={{ color: T.muted, fontSize: 13 }}>Keine Etappe gewählt.</div></Panel>
+      ) : (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2, 1fr)' : 'repeat(3, 1fr)', gap: 14 }}>
+            <KPI icon={IImage} label="Varianten erfasst"
+              value={`${igVarianten.length} / ${REEL_STILE_SOLL}`}
+              sub={igVarianten.length < REEL_STILE_SOLL ? 'noch nicht alle Stile mit Snapshot' : 'alle Stile erfasst'} />
+            <KPI icon={ITrendUp} label="Ø Views (Etappe)"
+              value={igVarianten.length ? Math.round(mittel(igVarianten, 'views') || 0) : '–'}
+              sub={`${igVarianten.length} Instagram-Variante${igVarianten.length === 1 ? '' : 'n'}`} />
+            <KPI icon={IClock} label="Ø Retention (Etappe)"
+              value={igVarianten.length ? `${(mittel(igVarianten, 'retention_pct') || 0).toFixed(1)}%` : '–'}
+              sub="Watch-Time ÷ Reel-Länge" />
+          </div>
+
+          <Panel>
+            <PanelHeader icon={IImage} label="Varianten dieser Etappe" serif={`T${curE.n} · ${curE.name}`} />
+            {igVarianten.length === 0 ? (
+              <div style={{ color: T.muted, fontSize: 13 }}>Noch keine Instagram-Snapshots für diese Etappe.</div>
+            ) : (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                {igVarianten.map(r => (
+                  <ReelVarianteRow key={`${r.variante}|${r.platform}`} r={r} feld={feld} maxWert={maxWert} historie={historieFuer(r)} />
+                ))}
+              </div>
+            )}
+            {/* E2c: Instagram und YouTube getrennt ausweisen statt gemeinsam zu mitteln —
+                die Plattformen unterscheiden sich fast 100:1 in den Views (siehe
+                Einordnungszeile unten), ein gemeinsamer Schnitt wäre IG-dominiert. */}
+            {ytVarianten.length > 0 && (
+              <div style={{ marginTop: 18, paddingTop: 16, borderTop: `1px solid ${T.border}` }}>
+                <div style={{ fontSize: 11, color: T.muted, fontWeight: 600, textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 10 }}>YouTube</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+                  {ytVarianten.map(r => (
+                    <ReelVarianteRow key={`${r.variante}|${r.platform}`} r={r} feld={feld} maxWert={maxWert} historie={historieFuer(r)} />
+                  ))}
+                </div>
+              </div>
+            )}
+          </Panel>
+
+          <div style={{ fontSize: 11, color: T.mutedSoft, fontFamily: T.sans, lineHeight: 1.55, padding: '2px 4px' }}>
+            {einordnung} Views und Retention laufen bei diesem Account gegeneinander: weite
+            Explore-Ausspielung bringt viele Views und niedrige Retention — beide Maße einzeln
+            lesen, nicht addieren. PUBLISH_BELEGUNG bindet jeden Stil an feste Slots
+            (original_images immer 5, selfie_first fast immer 1/2) — ein Stil-Unterschied kann
+            ein Uhrzeit-Unterschied sein.
+          </div>
+        </>
+      )}
     </div>
   );
 }
@@ -3026,25 +3552,42 @@ const monthLabel = (monat, full) => {
 // beim Lauf selbst zugerechnet hat. Bewusst ein Näherungswert: Alt-Etappen werden
 // nie nachgerechnet, und was außerhalb eines Etappen-Laufs anfällt (Entwicklung,
 // Tests, verworfene Renders) taucht hier gar nicht auf.
+//
+// Zusätzlich wird gezählt, wie viele Etappen GAR KEINE Telemetrie haben (Läufe von
+// vor dem Telemetrie-Einbau). Ohne diese Zahl liest sich die Differenz zum Beleg wie
+// reine Entwicklungskosten — tatsächlich stecken darin auch fertig publizierte Reels,
+// deren Kosten nur nie erfasst wurden. Sie werden nach created_at gebucht: run_at ist
+// bei ihnen leer, und datum ist der Wandertag (oft Jahre vor dem Lauf), taugt also nicht.
 async function fetchTelemetrieKosten() {
-  const url = `${SUPABASE_URL}/rest/v1/etappen?select=run_at,datum,cost_total_eur&cost_total_eur=not.is.null&limit=1000`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
-  if (!res.ok) return {};
-  const rows = await res.json();
-  const out = {};
+  let rows;
+  try {
+    rows = await fetchAll('etappen?select=run_at,datum,created_at,cost_total_eur,pipeline_status&order=created_at.asc');
+  } catch {
+    return { kosten: {}, ohne: {}, ohneGesamt: 0, ohnePubliziert: 0 };
+  }
+  const kosten = {}, ohne = {};
+  let ohneGesamt = 0, ohnePubliziert = 0;
+  const bucket = iso => iso ? iso.slice(5, 7) + '-' + iso.slice(0, 4) : null;
   rows.forEach(r => {
-    const iso = r.run_at || r.datum;
-    if (!iso) return;
-    const monat = iso.slice(5, 7) + '-' + iso.slice(0, 4);
-    out[monat] = (out[monat] || 0) + (r.cost_total_eur || 0);
+    if (r.cost_total_eur == null) {
+      const monat = bucket(r.created_at);
+      if (!monat) return;
+      ohne[monat] = (ohne[monat] || 0) + 1;
+      ohneGesamt += 1;
+      if (r.pipeline_status === 'publiziert') ohnePubliziert += 1;
+      return;
+    }
+    const monat = bucket(r.run_at || r.datum);
+    if (!monat) return;
+    kosten[monat] = (kosten[monat] || 0) + (r.cost_total_eur || 0);
   });
-  return out;
+  return { kosten, ohne, ohneGesamt, ohnePubliziert };
 }
 
 function TabKostenGesamt() {
   const mobile = useMobile();
   const [kosten, setKosten] = React.useState(null);
-  const [telemetrie, setTelemetrie] = React.useState({});
+  const [telemetrie, setTelemetrie] = React.useState({ kosten: {}, ohne: {}, ohneGesamt: 0, ohnePubliziert: 0 });
   const [fehler, setFehler] = React.useState(null);
 
   React.useEffect(() => {
@@ -3052,7 +3595,7 @@ function TabKostenGesamt() {
       .then(r => { if (!r.ok) throw new Error(`costs_data.json — HTTP ${r.status}`); return r.json(); })
       .then(setKosten)
       .catch(e => setFehler(String(e.message || e)));
-    fetchTelemetrieKosten().then(setTelemetrie).catch(() => setTelemetrie({}));
+    fetchTelemetrieKosten().then(setTelemetrie).catch(() => setTelemetrie({ kosten: {}, ohne: {}, ohneGesamt: 0, ohnePubliziert: 0 }));
   }, []);
 
   const KB = '#2F5FA3', KBSoft = '#EAF1FB', KBBorder = '#CFE0F5', KBTrack = '#D9E6F7', KBInk = '#5A7BA3';
@@ -3089,8 +3632,24 @@ function TabKostenGesamt() {
   const fmtUsd = n => '$' + n.toFixed(2);
   const fmtEur = n => '€' + n.toFixed(2);
 
+  if (months.length === 0) return (
+    <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px' : '24px 28px' }}>
+      <Panel style={{ padding: 20, maxWidth: 620 }}>
+        <div style={{ fontSize: 14, fontWeight: 600, color: T.ink, marginBottom: 8 }}>Noch keine Kostendaten</div>
+        <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.6 }}>
+          <span style={{ fontFamily: T.mono, fontSize: 12 }}>costs_data.json</span> enthält keine Monate.
+        </div>
+      </Panel>
+    </div>
+  );
+
   const grandUsd = months.reduce((a, m) => a + m.usd, 0);
   const grandEur = months.reduce((a, m) => a + m.eur, 0);
+  // Das Pro-Abo steckt in keinem Anbieter-Export (months[].eur sind reine Belege),
+  // wird aber unten in den Anbieter-Zeilen aufgeschlagen. Ohne diesen Posten zeigte
+  // die Kopfzahl weniger an, als die Aufschlüsselung direkt darunter aufsummiert.
+  const proAboGesamt = proEurMonat * months.length;
+  const grandEurGesamt = grandEur + proAboGesamt;
   const totalCalls = (kosten.models || []).reduce((a, r) => a + r[1], 0);
   const lastMonth = [...months].filter(m => m.complete).slice(-1)[0] || months[months.length - 1];
   const lastIdx = months.findIndex(m => m.monat === lastMonth.monat);
@@ -3099,8 +3658,19 @@ function TabKostenGesamt() {
   let running = 0;
   const cumMonths = months.map(m => { running += m.usd; return { ...m, cum: running, cumPct: grandUsd ? running / grandUsd * 100 : 0 }; });
 
+  // null in provider_monthly heißt "für diesen Monat liegt gar kein Export vor" —
+  // etwas anderes als "nichts ausgegeben". Fürs Rechnen wird daraus 0, fürs Anzeigen
+  // ein "—". Ohne die Trennung wird ein fehlender Export zu einer glaubwürdigen Null
+  // (genau das ließ im Juli die Telemetrie über dem Beleg landen).
   const providerMonthly = {};
   providerOrder.forEach(p => { providerMonthly[p] = months.map(m => (kosten.provider_monthly?.[m.monat] || {})[p] || 0); });
+  const fehlendeAnbieter = m => m.fehlende_anbieter || [];
+  const unvollstaendig = months.filter(m => fehlendeAnbieter(m).length > 0);
+  const anbieterUnvollstaendig = p => months.some(m => fehlendeAnbieter(m).includes(p));
+  const unvollstaendigGrund = m => [
+    fehlendeAnbieter(m).length ? `Kein Export von: ${fehlendeAnbieter(m).map(providerLabel).join(', ')}` : '',
+    m.laufend ? 'Monat läuft noch' : '',
+  ].filter(Boolean).join(' · ');
 
   // Das Claude-Pro-Abo läuft über keinen API-Export — es steckt in keiner CSV und
   // kommt hier als Schätzwert aus der meta dazu, sichtbar als eigene Unterzeile.
@@ -3114,7 +3684,7 @@ function TabKostenGesamt() {
     .map(p => {
       const usd = werteProProvider(p);
       const base = p === 'anthropic' ? anthropicRow(usd, monate) : { eur: usd * kurs, sub: null };
-      return { name: p, color: providerColor(p), usd, ...base };
+      return { name: p, color: providerColor(p), usd, luecke: anbieterUnvollstaendig(p), ...base };
     })
     .filter(p => p.eur > 0.001)
     .sort((a, b) => b.eur - a.eur);
@@ -3148,11 +3718,15 @@ function TabKostenGesamt() {
   const lastRest = { count: lastRestList.length, total: lastRestList.reduce((a, r) => a + r.val, 0) };
 
   // Näherung gegen Beleg: was die Telemetrie den Etappen zugerechnet hat vs. was
-  // tatsächlich abgerechnet wurde. Die Lücke ist kein Fehler — sie ist alles, was
-  // nicht in einem Etappen-Lauf passiert ist (Entwicklung, Tests, Verworfenes).
-  const telemetrieMonate = months.map(m => telemetrie[m.monat] || 0);
+  // tatsächlich abgerechnet wurde. Die Lücke ist kein Fehler — aber auch nicht rein
+  // Entwicklung: solange Etappen ohne Telemetrie mitlaufen, steckt in ihr auch
+  // fertige Produktion, deren Kosten nur nie erfasst wurden. Darum wird sie nur dann
+  // als Entwicklungskosten beschriftet, wenn es keine solchen Etappen (mehr) gibt.
+  const telemetrieMonate = months.map(m => telemetrie.kosten?.[m.monat] || 0);
   const telemetrieGesamt = telemetrieMonate.reduce((a, v) => a + v, 0);
-  const lueckeGesamt = Math.max(0, grandEur - telemetrieGesamt);
+  const ohneTelemetrieMonate = months.map(m => telemetrie.ohne?.[m.monat] || 0);
+  const ohneTelemetrieSichtbar = ohneTelemetrieMonate.reduce((a, v) => a + v, 0);
+  const lueckeGesamt = Math.max(0, grandEurGesamt - telemetrieGesamt);
 
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
@@ -3166,39 +3740,82 @@ function TabKostenGesamt() {
 
         <div style={{ display: 'grid', gridTemplateColumns: mobile ? 'repeat(2,1fr)' : 'repeat(5,1fr)', gap: 12 }}>
           <KPI icon={IEuro} label={monthLabel(lastMonth.monat, true)} value={fmtEur(months[lastIdx].eur)} sub="letzter vollständiger Monat" />
-          <KPI icon={IEuro} label="Gesamt EUR" value={fmtEur(grandEur)} sub={`${months.length} Monate · ${fmtUsd(grandUsd)}`} />
+          <KPI icon={IEuro} label="Gesamt EUR" value={fmtEur(grandEurGesamt)}
+               sub={proAboGesamt ? `${fmtEur(grandEur)} Belege + ${fmtEur(proAboGesamt)} Pro-Abo` : `${months.length} Monate · ${fmtUsd(grandUsd)}`} />
           <KPI icon={ICoins} label="Calls gesamt" value={totalCalls.toLocaleString('de-DE')} sub={`${modelsAll.length} Modelle`} />
-          <KPI icon={IDash} label="Ø / Monat" value={fmtEur(grandEur / (months.length || 1))} sub="über alle Monate" />
+          <KPI icon={IDash} label="Ø / Monat" value={fmtEur(grandEurGesamt / (months.length || 1))} sub={proAboGesamt ? 'über alle Monate · inkl. Pro-Abo' : 'über alle Monate'} />
           <KPI icon={IActivity} label="Kosten / Call" value={'$' + costPerCall.toFixed(3)} sub="Ø gesamtes Projekt" />
         </div>
+
+        {unvollstaendig.length > 0 && (
+          <div style={{ background: T.warnSoft, border: `1px solid ${T.warn}33`, borderLeft: `3px solid ${T.warn}`, borderRadius: 8, padding: '12px 16px' }}>
+            <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink, marginBottom: 6 }}>
+              Unvollständige Monate — hier fehlen Anbieter-Exports
+            </div>
+            {unvollstaendig.map(m => (
+              <div key={m.monat} style={{ fontSize: 12, color: T.muted, lineHeight: 1.6 }}>
+                <span style={{ fontFamily: T.mono }}>{monthLabel(m.monat, true)}</span>
+                {m.laufend && <span style={{ color: T.mutedSoft }}> · Monat läuft noch</span>}
+                {' — kein Export von '}
+                <span style={{ color: T.ink }}>{fehlendeAnbieter(m).map(providerLabel).join(', ')}</span>
+              </div>
+            ))}
+            <div style={{ fontSize: 10.5, color: T.mutedSoft, marginTop: 7, lineHeight: 1.5 }}>
+              Diese Monate sind nach unten verzerrt. Alle Zahlen, die sie einschließen — Gesamt, Ø/Monat,
+              Kosten/Call — sind entsprechend zu niedrig.
+            </div>
+          </div>
+        )}
 
         <Section label="Beleg gegen Telemetrie">
           <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
             <div style={{ display: 'flex', flexWrap: 'wrap', gap: mobile ? 16 : 34, marginBottom: 16 }}>
               <div>
                 <div style={{ fontSize: 11, color: T.muted, marginBottom: 3 }}>Belege gesamt</div>
-                <div style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 700, color: T.ink }}>{fmtEur(grandEur)}</div>
+                <div style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 700, color: T.ink }}>{fmtEur(grandEurGesamt)}</div>
               </div>
               <div>
                 <div style={{ fontSize: 11, color: T.muted, marginBottom: 3 }}>davon Etappen zugerechnet</div>
                 <div style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 700, color: KB }}>{fmtEur(telemetrieGesamt)}</div>
               </div>
               <div>
-                <div style={{ fontSize: 11, color: T.muted, marginBottom: 3 }}>Entwicklung, Tests, Verworfenes</div>
+                <div style={{ fontSize: 11, color: T.muted, marginBottom: 3 }}>
+                  {telemetrie.ohneGesamt > 0 ? 'Nicht zugerechnet' : 'Entwicklung, Tests, Verworfenes'}
+                </div>
                 <div style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 700, color: T.mutedSoft }}>{fmtEur(lueckeGesamt)}</div>
+                {telemetrie.ohneGesamt > 0 && (
+                  <div style={{ fontSize: 10.5, color: T.warn, marginTop: 2 }}>
+                    enthält {telemetrie.ohneGesamt} Etappen ohne Telemetrie
+                    {telemetrie.ohnePubliziert > 0 && `, davon ${telemetrie.ohnePubliziert} publiziert`}
+                  </div>
+                )}
               </div>
             </div>
             {months.map((m, i) => {
               const ist = m.eur, tel = telemetrieMonate[i];
               const maxEur = Math.max(...months.map(x => x.eur), 0.01);
+              // Telemetrie über Beleg heißt nicht "mehr ausgegeben", sondern: der Beleg
+              // ist unvollständig. Früher klemmte hier ein Math.min() den Balken und
+              // ließ die Zahl daneben stehen — der Widerspruch war unsichtbar.
+              const ueberhang = tel > ist + 0.005;
+              const fehlt = fehlendeAnbieter(m);
+              // Etappen ohne Telemetrie erklären, warum der dunkle Balken kurz bleibt,
+              // obwohl in dem Monat produziert wurde — sonst liest sich die Differenz
+              // wie Entwicklungsaufwand.
+              const ohneTel = ohneTelemetrieMonate[i];
               return (
                 <div key={m.monat} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '5px 0' }}>
-                  <div style={{ width: mobile ? 34 : 58, fontFamily: T.mono, fontSize: 11, color: T.muted }}>{monthLabel(m.monat)}</div>
+                  <div style={{ width: mobile ? 34 : 58, fontFamily: T.mono, fontSize: 11, color: T.muted }}>
+                    {monthLabel(m.monat)}
+                    {fehlt.length > 0 && <span title={`Kein Export von: ${fehlt.map(providerLabel).join(', ')}`} style={{ color: T.warn }}> •</span>}
+                    {ohneTel > 0 && <span title={`${ohneTel} Etappe(n) ohne Telemetrie — Kosten stecken im Beleg, nicht im dunklen Balken`} style={{ color: T.mutedSoft }}> ○</span>}
+                  </div>
                   <div style={{ flex: 1, height: 14, background: KBTrack, borderRadius: 4, overflow: 'hidden', position: 'relative' }}>
                     <div style={{ position: 'absolute', inset: 0, width: `${ist / maxEur * 100}%`, background: KBSoft, borderRight: `1px solid ${KBBorder}` }} />
                     <div style={{ position: 'absolute', inset: 0, width: `${Math.min(tel, ist) / maxEur * 100}%`, background: KB }} />
+                    {ueberhang && <div style={{ position: 'absolute', top: 0, bottom: 0, left: `${ist / maxEur * 100}%`, width: `${(tel - ist) / maxEur * 100}%`, background: `repeating-linear-gradient(45deg, ${T.warn}, ${T.warn} 3px, transparent 3px, transparent 6px)` }} />}
                   </div>
-                  <div style={{ width: 66, textAlign: 'right', fontFamily: T.mono, fontSize: 11.5, color: KB, fontWeight: 600 }}>{tel ? fmtEur(tel) : '–'}</div>
+                  <div style={{ width: 66, textAlign: 'right', fontFamily: T.mono, fontSize: 11.5, color: ueberhang ? T.warn : KB, fontWeight: 600 }}>{tel ? fmtEur(tel) : '–'}</div>
                   <div style={{ width: 70, textAlign: 'right', fontFamily: T.mono, fontSize: 12, fontWeight: 700, color: T.ink }}>{fmtEur(ist)}</div>
                 </div>
               );
@@ -3206,6 +3823,8 @@ function TabKostenGesamt() {
             <div style={{ fontSize: 10.5, color: T.mutedSoft, marginTop: 10, lineHeight: 1.5 }}>
               Dunkel = was die Pipeline einzelnen Etappen beim Lauf zugerechnet hat (Näherung aus Einheitspreisen,
               wird für alte Etappen nie nachgerechnet). Hell = tatsächlich abgerechnet.
+              {unvollstaendig.length > 0 && <> Schraffiert = Telemetrie über Beleg — dort fehlen Anbieter-Exports, nicht Geld.</>}
+              {ohneTelemetrieSichtbar > 0 && <> ○ = Etappen ohne Telemetrie: real produziert und bezahlt, aber nie erfasst — ihre Kosten sitzen im hellen Balken, nicht im dunklen.</>}
             </div>
           </div>
         </Section>
@@ -3246,7 +3865,7 @@ function TabKostenGesamt() {
                     {mom == null ? '—' : (mom >= 0 ? '+' : '−') + Math.abs(mom).toFixed(0) + '%'}
                   </div>
                   <div style={{ width: '100%', background: KB, borderRadius: '4px 4px 0 0', height: `${m.usd / maxUsd * 100}%` }} />
-                  <div style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{m.monat}{!m.complete && <span style={{ color: T.warn }}> •</span>}</div>
+                  <div style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{m.monat}{!m.complete && <span title={unvollstaendigGrund(m)} style={{ color: T.warn }}> •</span>}</div>
                 </div>
               );
             })}
@@ -3288,7 +3907,7 @@ function TabKostenGesamt() {
                         return <div key={p} title={`${providerLabel(p)}: ${fmtEur(v * kurs)}`} style={{ width: '100%', height: `${v / total * 100}%`, background: providerColor(p) }} />;
                       })}
                     </div>
-                    <div style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>{monthLabel(m.monat)}{!m.complete && <span style={{ color: T.warn }}> •</span>}</div>
+                    <div style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>{monthLabel(m.monat)}{!m.complete && <span title={unvollstaendigGrund(m)} style={{ color: T.warn }}> •</span>}</div>
                   </div>
                 );
               })}
@@ -3354,7 +3973,10 @@ function ProviderRow({ p, max, fmtEur, track }) {
     <div style={{ display: 'flex', flexDirection: 'column', gap: 6 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
         <div style={{ width: 9, height: 9, borderRadius: '50%', background: p.color, flex: 'none' }} />
-        <div style={{ width: 90, fontSize: 13, fontWeight: 600, color: T.ink }}>{providerLabel(p.name)}</div>
+        <div style={{ width: 90, fontSize: 13, fontWeight: 600, color: T.ink }}>
+          {providerLabel(p.name)}
+          {p.luecke && <span title="In mindestens einem Monat fehlt der Export — Wert ist zu niedrig" style={{ color: T.warn, fontWeight: 700 }}> •</span>}
+        </div>
         <div style={{ flex: 1, height: 10, background: track, borderRadius: 5, overflow: 'hidden' }}>
           <div style={{ height: '100%', background: p.color, width: `${p.eur / max * 100}%`, borderRadius: 5 }} />
         </div>
@@ -3395,13 +4017,24 @@ function App() {
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
-  const [selectedIdx, setSelectedIdx] = useState(null);
+  // B9: Auswahl hängt an der Etappen-id, nicht am Listenindex — sonst zeigt jeder
+  // Filter- oder Sortierwechsel plötzlich eine andere Etappe.
+  const [selectedId, setSelectedId] = useState(null);
+  const [routeFilter, setRouteFilter] = useState('');       // '' = alle Routen
+  const [sortMode, setSortMode] = useState('wandertag');    // 'wandertag' | 'rechendatum'
   const [steps, setSteps]     = useState([]);
   const [runEtappeId, setRunEtappeId] = useState(null);
   const [routeDropdownOpen, setRouteDropdownOpen] = useState(false);
 
   React.useEffect(() => {
-    Promise.all([fetchEtappen(), fetchRouten()])
+    // costs_data.json zuerst (best effort) — setKostenPreise() muss laufen, bevor
+    // transformData() platformCosts() aufruft, sonst rechnet der erste Render mit
+    // dem eingebauten Fallback statt den aktuellen Preisen aus dem Beleg (C1/C2).
+    fetch('costs_data.json', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(j => setKostenPreise(j?.meta))
+      .catch(() => {})
+      .then(() => Promise.all([fetchEtappen(), fetchRouten()]))
       .then(([rows, routeMap]) => setData(transformData(rows, routeMap)))
       .catch(e  => setLoadError(e.message))
       .finally(() => setLoading(false));
@@ -3427,22 +4060,57 @@ function App() {
     return () => clearInterval(iv);
   }, [isRunning, runEtappeId]);
 
+  // B1/B2/B8 — die Ansicht arbeitet ab hier auf der gefilterten und sortierten
+  // Liste. Die Nebenreihen werden aus genau dieser Liste neu gerechnet, damit die
+  // Übersicht nicht weiter routen-gemischte Kurven zeigt.
+  const viewData = React.useMemo(() => {
+    if (!data) return null;
+    const liste = viewListe(data.etappenList, routeFilter, sortMode);
+    // Der Kosten-Tab zeigt weiter jeden Run einzeln (A3), folgt aber demselben
+    // Routenfilter und derselben Sortierachse.
+    const alleRuns = viewListe(data.etappenListAlleRuns || data.etappenList, routeFilter, sortMode);
+    return {
+      ...data,
+      etappenList: liste,
+      etappenListAlleRuns: alleRuns,
+      ...nebenreihen(liste, {}, data.etappenList.find(e => e.id === data.latestId)?.route || null),
+    };
+  }, [data, routeFilter, sortMode]);
+
+  const viewList = viewData?.etappenList ?? [];
+
+  // Auswahl über die id auflösen (B9). Fällt die gewählte Etappe aus dem Filter,
+  // greift der Default: die zuletzt gelaufene Etappe der sichtbaren Liste.
+  const curIdx = React.useMemo(() => {
+    if (!viewList.length) return -1;
+    const byId = selectedId ? viewList.findIndex(e => e.id === selectedId) : -1;
+    if (byId >= 0) return byId;
+    const latestIdx = viewList.findIndex(e => e.id === data?.latestId);
+    return latestIdx >= 0 ? latestIdx : viewList.length - 1;
+  }, [viewList, selectedId, data]);
+
+  const gotoIdx = React.useCallback(i => {
+    const ziel = viewList[i];
+    if (ziel) setSelectedId(ziel.id);
+  }, [viewList]);
+
   React.useEffect(() => {
     const handler = e => {
       if (mode !== 'archiv') return;
       if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.isContentEditable) return;
-      const max = (data?.etappenList?.length ?? 1) - 1;
-      setSelectedIdx(i => {
-        const cur = i ?? max;
-        if (e.key === 'ArrowLeft')  return Math.max(0, cur - 1);
-        if (e.key === 'ArrowRight') return Math.min(max, cur + 1);
-        return i;
-      });
+      if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return;
+      // B4: die Pfeile laufen über die gefilterte Liste, nicht über alle Etappen.
+      const next = e.key === 'ArrowLeft'
+        ? Math.max(0, curIdx - 1)
+        : Math.min(viewList.length - 1, curIdx + 1);
+      gotoIdx(next);
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [mode, data]);
+  }, [mode, curIdx, viewList, gotoIdx]);
 
+  // Routenliste immer aus der *ungefilterten* Menge — sonst könnte man einen
+  // gesetzten Filter nicht mehr verlassen.
   const routes = React.useMemo(() => {
     if (!data) return [];
     const seen = new Set();
@@ -3453,7 +4121,6 @@ function App() {
         kuerzel:   e.kuerzel || '–',
         routeName: e.routeName || e.kuerzel || '–',
         count:     data.etappenList.filter(x => x.route === e.route).length,
-        firstIdx:  data.etappenList.findIndex(x => x.route === e.route),
       }));
   }, [data]);
 
@@ -3468,13 +4135,10 @@ function App() {
     </div>
   );
 
-  const lastIdx = data.etappenList.length - 1;
-  const latestRunIdx = data.etappenList.findIndex(e => e.id === data.latestId);
-  const defaultIdx = latestRunIdx >= 0 ? latestRunIdx : lastIdx;
-  const curIdx = selectedIdx !== null ? Math.max(0, Math.min(selectedIdx, lastIdx)) : defaultIdx;
-  const curEtappe = data.etappenList[curIdx];
+  const lastIdx = viewList.length - 1;
+  const curEtappe = viewList[curIdx];
   const canGoLeft = curIdx > 0;
-  const canGoRight = curIdx < lastIdx;
+  const canGoRight = curIdx >= 0 && curIdx < lastIdx;
 
   const tabs       = mode === 'archiv' ? ARCHIV_TABS : PIPELINE_TABS;
   const activeTab  = mode === 'archiv' ? tab : pipelineTab;
@@ -3483,7 +4147,7 @@ function App() {
 
   const navArrows = (
     <div style={{ display: 'flex', gap: 4 }}>
-      <button onClick={() => setSelectedIdx(curIdx - 1)} disabled={!canGoLeft}
+      <button onClick={() => gotoIdx(curIdx - 1)} disabled={!canGoLeft}
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 30, height: 30, borderRadius: 8,
           background: canGoLeft ? T.accentSoft : T.surfaceAlt,
@@ -3491,7 +4155,7 @@ function App() {
           color: canGoLeft ? T.accentInk : T.mutedSoft,
           cursor: canGoLeft ? 'pointer' : 'default',
           fontSize: 18, fontWeight: 600, lineHeight: 1, padding: 0 }}>{'‹'}</button>
-      <button onClick={() => setSelectedIdx(curIdx + 1)} disabled={!canGoRight}
+      <button onClick={() => gotoIdx(curIdx + 1)} disabled={!canGoRight}
         style={{ display: 'flex', alignItems: 'center', justifyContent: 'center',
           width: 30, height: 30, borderRadius: 8,
           background: canGoRight ? T.accentSoft : T.surfaceAlt,
@@ -3517,7 +4181,7 @@ function App() {
               <div style={{ fontSize: 15, fontWeight: 600, letterSpacing: -0.2, whiteSpace: 'nowrap' }}>Floppy Trail</div>
             ) : (
               <div>
-                <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: -0.2 }}>INSTA Pipeline <span style={{ fontWeight: 400, color: T.muted }}>| Floppy Trail</span></div>
+                <div style={{ fontSize: 14, fontWeight: 600, letterSpacing: -0.2 }}>INSTA Pipeline v2.0 <span style={{ fontWeight: 400, color: T.muted }}>| Floppy Trail</span></div>
                 <div style={{ fontSize: 11, color: T.muted, marginTop: 1 }}>Operations</div>
               </div>
             )}
@@ -3593,64 +4257,125 @@ function App() {
         )}
 
         {/* Title row */}
-        {mode === 'archiv' && (
-        <div style={{ marginTop: mobile ? 12 : 20 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
-            {curEtappe.kuerzel && (
-              <div style={{ position: 'relative' }}>
-                <button onClick={() => setRouteDropdownOpen(o => !o)}
-                  style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accentInk,
-                    background: T.accentSoft, borderRadius: 5, padding: '2px 8px',
-                    whiteSpace: 'nowrap', border: `1px solid ${T.border}`,
-                    cursor: routes.length > 1 ? 'pointer' : 'default',
-                    display: 'inline-flex', alignItems: 'center', gap: 4 }}>
-                  {curEtappe.kuerzel}
-                  {routes.length > 1 && <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>}
+        {mode === 'archiv' && curEtappe && (() => {
+          // B10: das Dropdown ist der Filter-Einstieg und wird immer gerendert —
+          // auch wenn die aktuelle Etappe kein Kürzel hat.
+          const routenChip = (
+            <div style={{ position: 'relative', flexShrink: 0 }}>
+              <button onClick={() => setRouteDropdownOpen(o => !o)}
+                style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accentInk,
+                  background: T.accentSoft, borderRadius: 5, padding: mobile ? '6px 11px' : '2px 8px',
+                  whiteSpace: 'nowrap', border: `1px solid ${routeFilter ? T.accent : T.border}`,
+                  cursor: 'pointer', display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                {routeFilter ? (routes.find(r => r.route === routeFilter)?.kuerzel || '–') : 'Alle Routen'}
+                <span style={{ fontSize: 8, opacity: 0.6 }}>▾</span>
+              </button>
+              {routeDropdownOpen && (
+                <>
+                  <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setRouteDropdownOpen(false)} />
+                  <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100,
+                    background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
+                    boxShadow: '0 8px 24px rgba(20,16,28,0.12)', minWidth: 220, overflow: 'hidden' }}>
+                    <button onClick={() => { setRouteFilter(''); setRouteDropdownOpen(false); }}
+                      style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                        padding: '10px 14px', border: 'none', cursor: 'pointer', textAlign: 'left',
+                        background: routeFilter === '' ? T.accentSoft : 'transparent',
+                        borderBottom: `1px solid ${T.border}` }}>
+                      <span style={{ fontFamily: T.sans, fontSize: 12, color: T.ink, fontWeight: routeFilter === '' ? 600 : 400 }}>
+                        Alle Routen
+                      </span>
+                      <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted, marginLeft: 'auto' }}>
+                        {data.etappenList.length} Etappen
+                      </span>
+                    </button>
+                    {routes.map(r => (
+                      <button key={r.route}
+                        onClick={() => { setRouteFilter(r.route); setRouteDropdownOpen(false); }}
+                        style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%',
+                          padding: '10px 14px', border: 'none', cursor: 'pointer', textAlign: 'left',
+                          background: r.route === routeFilter ? T.accentSoft : 'transparent',
+                          borderBottom: `1px solid ${T.border}` }}>
+                        <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700,
+                          color: T.accentInk, background: T.accentSoft, borderRadius: 4,
+                          padding: '1px 6px', border: `1px solid ${T.border}`, whiteSpace: 'nowrap' }}>
+                          {r.kuerzel}
+                        </span>
+                        <span style={{ fontFamily: T.sans, fontSize: 12, color: T.ink, fontWeight: r.route === routeFilter ? 600 : 400 }}>
+                          {r.routeName}
+                        </span>
+                        <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted, marginLeft: 'auto' }}>
+                          {r.count} Etappen
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+
+          // B3: Wandertag ↔ Rechendatum — gilt für Liste, Pfeile und Tabellen.
+          const sortChip = (
+            <div style={{ display: 'flex', flexShrink: 0, background: T.surfaceAlt, border: `1px solid ${T.border}`, borderRadius: 6, padding: 1, gap: 1 }}>
+              {[['wandertag', 'Wandertag'], ['rechendatum', 'Rechendatum']].map(([m, label]) => (
+                <button key={m} onClick={() => setSortMode(m)}
+                  title={m === 'wandertag' ? 'Nach Tag der Wanderung sortieren' : 'Nach Zeitpunkt des Pipeline-Laufs sortieren'}
+                  style={{ fontFamily: T.mono, fontSize: 9.5, letterSpacing: 0.4, textTransform: 'uppercase',
+                    fontWeight: sortMode === m ? 700 : 500, padding: mobile ? '5px 10px' : '3px 8px', borderRadius: 5,
+                    border: 'none', cursor: 'pointer', whiteSpace: 'nowrap',
+                    background: sortMode === m ? T.surface : 'transparent',
+                    color: sortMode === m ? T.ink : T.muted }}>
+                  {label}
                 </button>
-                {routeDropdownOpen && routes.length > 1 && (
-                  <>
-                    <div style={{ position: 'fixed', inset: 0, zIndex: 99 }} onClick={() => setRouteDropdownOpen(false)} />
-                    <div style={{ position: 'absolute', top: 'calc(100% + 6px)', left: 0, zIndex: 100,
-                      background: T.surface, border: `1px solid ${T.border}`, borderRadius: 10,
-                      boxShadow: '0 8px 24px rgba(20,16,28,0.12)', minWidth: 220, overflow: 'hidden' }}>
-                      {routes.map(r => (
-                        <button key={r.route}
-                          onClick={() => { setSelectedIdx(r.firstIdx); setRouteDropdownOpen(false); }}
-                          style={{ display: 'flex', alignItems: 'center', gap: 10, width: '100%',
-                            padding: '10px 14px', border: 'none', cursor: 'pointer', textAlign: 'left',
-                            background: r.route === curEtappe.route ? T.accentSoft : 'transparent',
-                            borderBottom: `1px solid ${T.border}` }}>
-                          <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700,
-                            color: T.accentInk, background: T.accentSoft, borderRadius: 4,
-                            padding: '1px 6px', border: `1px solid ${T.border}`, whiteSpace: 'nowrap' }}>
-                            {r.kuerzel}
-                          </span>
-                          <span style={{ fontFamily: T.sans, fontSize: 12, color: T.ink, fontWeight: r.route === curEtappe.route ? 600 : 400 }}>
-                            {r.routeName}
-                          </span>
-                          <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted, marginLeft: 'auto' }}>
-                            {r.count} Etappen
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </>
-                )}
+              ))}
+            </div>
+          );
+
+          // B6: Wandertag und Rechendatum stehen nebeneinander — die Kopfzeile
+          // zeigt nicht mehr nur die eine der beiden Zeitachsen.
+          const datumZeile = (
+            <span style={{ fontFamily: T.mono, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 500, color: T.accent, minWidth: 0 }}>
+              Tag {curEtappe.n} · {curEtappe.datum || data.date}
+              {curEtappe.run_at
+                ? <span style={{ color: T.muted, textTransform: 'none', letterSpacing: 0 }}> · gerechnet {curEtappe.run_at.slice(0, 10)} {curEtappe.run_at.slice(11, 16)}</span>
+                : <span style={{ color: T.warn, textTransform: 'none', letterSpacing: 0 }}> · nie gelaufen</span>}
+              {curEtappe.run > 1 && <span style={{ color: T.muted, textTransform: 'none', letterSpacing: 0 }}> · Run {curEtappe.run}</span>}
+            </span>
+          );
+
+          return (
+          <div style={{ marginTop: mobile ? 12 : 20 }}>
+            {/* B7: mobil trägt die Metazeile nur Datum + Pfeile; Routenfilter und
+                Sortierschalter stehen als Chip-Leiste unter dem Titel. */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
+              {!mobile && routenChip}
+              {!mobile && sortChip}
+              {datumZeile}
+              {mobile && <div style={{ marginLeft: 'auto', flexShrink: 0 }}>{navArrows}</div>}
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+              <h1 style={{ fontFamily: T.serif, fontSize: mobile ? 22 : 34, fontWeight: 400, margin: 0, letterSpacing: -0.5, lineHeight: 1.1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: mobile ? 'normal' : 'nowrap' }}>
+                {curEtappe.name.split('→')[0].trim()} <span style={{ color: T.accent, fontStyle: 'italic' }}>→</span> {curEtappe.name.split('→')[1]?.trim()}
+              </h1>
+              <Pill state={curEtappe?.status || data.status} label={curEtappe?.status || data.status} />
+              {curEtappe?.blogUrl && (
+                <a href={curEtappe.blogUrl} target="_blank" rel="noopener noreferrer"
+                  style={{ fontSize: 12, color: T.accent, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                  Blog-Beitrag ↗
+                </a>
+              )}
+            </div>
+            {/* Kein overflow-Container: das Routen-Dropdown klappt hier auf und
+                würde sonst am Rand abgeschnitten. */}
+            {mobile && (
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap' }}>
+                {routenChip}
+                {sortChip}
               </div>
             )}
-            <span style={{ fontFamily: T.mono, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 500, color: T.accent }}>
-              Tag {curEtappe.n} · {curEtappe.datum || data.date}
-            </span>
-            {mobile && <div style={{ marginLeft: 'auto' }}>{navArrows}</div>}
           </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
-            <h1 style={{ fontFamily: T.serif, fontSize: mobile ? 22 : 34, fontWeight: 400, margin: 0, letterSpacing: -0.5, lineHeight: 1.1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: mobile ? 'normal' : 'nowrap' }}>
-              {curEtappe.name.split('→')[0].trim()} <span style={{ color: T.accent, fontStyle: 'italic' }}>→</span> {curEtappe.name.split('→')[1]?.trim()}
-            </h1>
-            <Pill state={curEtappe?.status || data.status} label={curEtappe?.status || data.status} />
-          </div>
-        </div>
-        )}
+          );
+        })()}
 
         {/* Pipeline title row */}
         {mode === 'pipeline' && (() => {
@@ -3660,15 +4385,15 @@ function App() {
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 8 }}>
               {pe?.kuerzel && <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.accentInk, background: T.accentSoft, borderRadius: 5, padding: '2px 8px', whiteSpace: 'nowrap', border: `1px solid ${T.border}` }}>{pe.kuerzel}</span>}
               <span style={{ fontFamily: T.mono, fontSize: 11, letterSpacing: 0.6, textTransform: 'uppercase', fontWeight: 500, color: T.accent }}>
-                {pe ? `Tag ${pe.n} \u00b7 ${pe.datum}` : `Pipeline \u00b7 ${new Date().toISOString().slice(0, 10)}`}
+                {pe ? `Tag ${pe.n} · ${pe.datum}` : `Pipeline · ${new Date().toISOString().slice(0, 10)}`}
               </span>
-              {isRunning && <Pill state="running" label="l\u00e4uft" />}
+              {isRunning && <Pill state="running" label="läuft" />}
             </div>
             <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
               <h1 style={{ fontFamily: T.serif, fontSize: mobile ? 22 : 34, fontWeight: 400, margin: 0, letterSpacing: -0.5, lineHeight: 1.1, color: pe?.name ? T.ink : T.mutedSoft }}>
                 {pe?.name
-                  ? <>{pe.name.split('\u2192')[0].trim()} <span style={{ color: T.accent, fontStyle: 'italic' }}>\u2192</span> {pe.name.split('\u2192')[1]?.trim()}</>
-                  : <span style={{ fontStyle: 'italic' }}>Startort \u2192 Zielort</span>
+                  ? <>{pe.name.split('→')[0].trim()} <span style={{ color: T.accent, fontStyle: 'italic' }}>→</span> {pe.name.split('→')[1]?.trim()}</>
+                  : <span style={{ fontStyle: 'italic' }}>Startort → Zielort</span>
                 }
               </h1>
               {pe && <Pill state={pe.status} label={pe.status} />}
@@ -3703,8 +4428,8 @@ function App() {
         ? <TabKostenGesamt />
         : <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
             {activeTab === 'liverun'
-              ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} latestEtappe={data?.etappenList?.[data.etappenList.length - 1]} />
-              : activeContent?.Content ? <activeContent.Content data={data} selectedEtappe={curEtappe} /> : null
+              ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} latestEtappe={data?.etappenList?.find(e => e.id === data.latestId) || data?.etappenList?.[data.etappenList.length - 1]} />
+              : activeContent?.Content ? <activeContent.Content data={viewData} selectedEtappe={curEtappe} /> : null
             }
           </div>
       }

@@ -1,41 +1,90 @@
 {
  "meta": {
-  "stand": "23.07.2026",
+  "stand": "02.08.2026",
   "kurs_usd_eur": 0.8765,
   "anthropic_pro_eur_monat": 18.0,
+  "preise_usd": {
+   "t2i_bild": 0.067,
+   "flash_clip": 0.175,
+   "wan27_clip": 1.5,
+   "hero_bild": 0.075,
+   "tts": 0.11,
+   "suno_song": 0.06,
+   "tts_minimax": 0.17
+  },
+  "preise_anbieter": {
+   "t2i_bild": "wavespeed",
+   "wan27_clip": "wavespeed",
+   "flash_clip": "atlas",
+   "hero_bild": "atlas",
+   "tts": "fal",
+   "tts_minimax": "minimax",
+   "suno_song": "sunoapi"
+  },
   "quelle": "tools/costs_report.py --json",
-  "hinweis": "Beträge sind die Originalwerte der Anbieter-Abrechnungen. Suno rechnet nativ in Credits; der USD-Gegenwert basiert auf der realen Kartenbuchung CREEM*AIAPI, 25.06.2026: $5,00 für 1000 Credits → $0.005/Credit. Der EUR-Kurs (0.8765) gilt pauschal für alle Monate."
+  "hinweis": "Beträge sind die Originalwerte der Anbieter-Abrechnungen. Suno rechnet nativ in Credits; der USD-Gegenwert basiert auf der realen Kartenbuchung CREEM*AIAPI, 25.06.2026: $5,00 für 1000 Credits → $0.005/Credit. Der EUR-Kurs (0.8765) gilt pauschal für alle Monate.",
+  "nicht_projekt": {
+   "anthropic": {
+    "Claude Code": 18.97,
+    "Default": 1.58
+   }
+  }
  },
  "months": [
   {
    "monat": "03-2026",
    "complete": true,
-   "usd": 118.45,
-   "eur": 103.82
+   "laufend": false,
+   "fehlende_anbieter": [],
+   "usd": 97.9,
+   "eur": 85.81
   },
   {
    "monat": "04-2026",
    "complete": true,
+   "laufend": false,
+   "fehlende_anbieter": [],
    "usd": 196.01,
    "eur": 171.81
   },
   {
    "monat": "05-2026",
    "complete": true,
+   "laufend": false,
+   "fehlende_anbieter": [],
    "usd": 184.76,
    "eur": 161.94
   },
   {
    "monat": "06-2026",
    "complete": true,
+   "laufend": false,
+   "fehlende_anbieter": [],
    "usd": 86.96,
    "eur": 76.22
   },
   {
    "monat": "07-2026",
+   "complete": true,
+   "laufend": false,
+   "fehlende_anbieter": [],
+   "usd": 67.31,
+   "eur": 59.0
+  },
+  {
+   "monat": "08-2026",
    "complete": false,
-   "usd": 28.13,
-   "eur": 24.65
+   "laufend": true,
+   "fehlende_anbieter": [
+    "anthropic",
+    "atlas",
+    "fal",
+    "google",
+    "minimax",
+    "sunoapi"
+   ],
+   "usd": 2.14,
+   "eur": 1.88
   }
  ],
  "provider_order": [
@@ -49,7 +98,7 @@
  ],
  "provider_monthly": {
   "03-2026": {
-   "anthropic": 34.92,
+   "anthropic": 14.37,
    "fal": 83.53
   },
   "04-2026": {
@@ -74,42 +123,61 @@
    "wavespeed": 26.04
   },
   "07-2026": {
-   "wavespeed": 28.13
+   "anthropic": 11.95,
+   "atlas": 11.94,
+   "fal": 6.45,
+   "google": 0.72,
+   "minimax": 1.83,
+   "sunoapi": 4.77,
+   "wavespeed": 29.65
+  },
+  "08-2026": {
+   "wavespeed": 2.14,
+   "anthropic": null,
+   "atlas": null,
+   "fal": null,
+   "google": null,
+   "minimax": null,
+   "sunoapi": null
   }
  },
  "models": [
   [
-   "anthropic/Claude Sonnet 4.6",
-   192,
-   27.52,
-   54.1,
-   56.03,
-   8.78,
-   0
-  ],
-  [
    "atlas/alibaba/wan-2.6/image-to-video-flash",
-   717,
+   782,
    0,
    46.72,
    61.95,
    16.98,
+   11.38,
+   0
+  ],
+  [
+   "anthropic/Claude Sonnet 4.6",
+   197,
+   9.33,
+   54.1,
+   56.03,
+   8.78,
+   2.87,
    0
   ],
   [
    "wavespeed/google/nano-banana-2/text-to-image",
-   855,
+   858,
    0,
    0,
    29.47,
    12.81,
-   14.43
+   14.49,
+   0.19
   ],
   [
    "fal/fal-ai/nano-banana-2",
    16,
    27.36,
    23.04,
+   0,
    0,
    0,
    0
@@ -121,6 +189,7 @@
    16.29,
    8.6,
    6.7,
+   0,
    0
   ],
   [
@@ -130,6 +199,7 @@
    8.8,
    0,
    0.8,
+   0,
    0
   ],
   [
@@ -139,15 +209,17 @@
    6.26,
    0,
    0,
+   0,
    0
   ],
   [
    "fal/fal-ai/elevenlabs/tts/eleven-v3",
-   62,
+   71,
    3.5,
    5.89,
    5.08,
    3.61,
+   6.17,
    0
   ],
   [
@@ -157,15 +229,17 @@
    0,
    17.64,
    0,
+   0,
    0
   ],
   [
-   "anthropic/Claude Opus 4.6",
-   35,
-   5.64,
-   8.56,
+   "anthropic/Claude Opus 4.8",
+   53,
    0,
    0,
+   0,
+   5.95,
+   9.06,
    0
   ],
   [
@@ -175,7 +249,18 @@
    0,
    0,
    3.5,
-   10.5
+   10.5,
+   0
+  ],
+  [
+   "anthropic/Claude Opus 4.6",
+   33,
+   4.06,
+   8.56,
+   0,
+   0,
+   0,
+   0
   ],
   [
    "wavespeed/alibaba/wan-2.7/image-to-video",
@@ -184,24 +269,17 @@
    0,
    0,
    5.4,
-   3.2
-  ],
-  [
-   "anthropic/Claude Haiku 4.5",
-   143,
-   1.76,
-   2.11,
-   1.72,
-   2.39,
+   3.2,
    0
   ],
   [
    "minimax/MiniMax-M3-512k",
-   48,
+   50,
    0,
    0,
    0,
    7.8,
+   0.03,
    0
   ],
   [
@@ -211,15 +289,27 @@
    6.51,
    0.09,
    0.63,
+   0,
    0
   ],
   [
-   "anthropic/Claude Opus 4.8",
-   24,
+   "anthropic/Claude Haiku 4.5",
+   129,
+   0.98,
+   2.11,
+   1.72,
+   2.39,
+   0.02,
+   0
+  ],
+  [
+   "sunoapi/suno_generate_V5_5",
+   81,
    0,
    0,
    0,
-   5.95,
+   0.48,
+   4.38,
    0
   ],
   [
@@ -229,6 +319,7 @@
    0,
    0,
    4.28,
+   0,
    0
   ],
   [
@@ -238,31 +329,35 @@
    4.21,
    0,
    0,
-   0
-  ],
-  [
-   "wavespeed/alibaba/wan-2.7/text-to-image",
-   133,
-   0,
-   2.73,
-   0.96,
    0,
    0
   ],
   [
    "atlas/google/nano-banana-2/edit",
-   48,
+   55,
    0,
    2.0,
    0.64,
    0.94,
+   0.56,
    0
+  ],
+  [
+   "wavespeed/alibaba/wan-2.7/text-to-image",
+   136,
+   0,
+   2.73,
+   0.96,
+   0,
+   0,
+   0.09
   ],
   [
    "fal/bytedance/seedance-2.0/image-to-video",
    1,
    0,
    3.01,
+   0,
    0,
    0,
    0
@@ -274,12 +369,14 @@
    0.3,
    1.8,
    0.9,
+   0,
    0
   ],
   [
    "fal/fal-ai/kling-video/v3/pro/image-to-video",
    1,
    2.52,
+   0,
    0,
    0,
    0,
@@ -292,6 +389,7 @@
    2.44,
    0,
    0,
+   0,
    0
   ],
   [
@@ -301,12 +399,34 @@
    0,
    0,
    0,
+   0,
+   0
+  ],
+  [
+   "minimax/speech-2.8-hd",
+   13,
+   0,
+   0,
+   0,
+   0.69,
+   1.04,
+   0
+  ],
+  [
+   "google/Gemini API",
+   2,
+   0,
+   0,
+   0,
+   0.9,
+   0.72,
    0
   ],
   [
    "fal/fal-ai/veo3.1/first-last-frame-to-video",
    1,
    1.6,
+   0,
    0,
    0,
    0,
@@ -319,6 +439,17 @@
    0,
    0,
    1.5,
+   0,
+   0
+  ],
+  [
+   "wavespeed/elevenlabs/eleven-v3",
+   12,
+   0,
+   0,
+   0,
+   0,
+   1.4,
    0
   ],
   [
@@ -328,6 +459,27 @@
    0,
    0,
    0,
+   0,
+   0
+  ],
+  [
+   "wavespeed/openai/gpt-image-2/text-to-image",
+   9,
+   0,
+   0,
+   0,
+   0,
+   0,
+   1.15
+  ],
+  [
+   "minimax/MiniMax-M2.7-highspeed",
+   31,
+   0,
+   0,
+   0,
+   0.25,
+   0.76,
    0
   ],
   [
@@ -335,6 +487,7 @@
    1,
    0,
    0.98,
+   0,
    0,
    0,
    0
@@ -346,15 +499,7 @@
    0,
    0,
    0.93,
-   0
-  ],
-  [
-   "google/Gemini API",
-   1,
    0,
-   0,
-   0,
-   0.9,
    0
   ],
   [
@@ -362,6 +507,7 @@
    1,
    0,
    0.8,
+   0,
    0,
    0,
    0
@@ -373,21 +519,14 @@
    0.75,
    0,
    0,
-   0
-  ],
-  [
-   "minimax/speech-2.8-hd",
-   4,
    0,
-   0,
-   0,
-   0.69,
    0
   ],
   [
    "fal/fal-ai/minimax/speech-02-hd",
    3,
    0.64,
+   0,
    0,
    0,
    0,
@@ -400,6 +539,7 @@
    0,
    0,
    0.61,
+   0,
    0
   ],
   [
@@ -409,7 +549,18 @@
    0,
    0,
    0,
+   0,
    0
+  ],
+  [
+   "wavespeed/google/nano-banana-pro/text-to-image",
+   4,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0.59
   ],
   [
    "fal/fal-ai/minimax-music/v2",
@@ -418,21 +569,14 @@
    0,
    0,
    0,
-   0
-  ],
-  [
-   "sunoapi/suno_generate_V5_5",
-   8,
    0,
-   0,
-   0,
-   0.48,
    0
   ],
   [
    "fal/fal-ai/sora-2/text-to-video",
    1,
    0.4,
+   0,
    0,
    0,
    0,
@@ -445,6 +589,7 @@
    0.38,
    0,
    0,
+   0,
    0
   ],
   [
@@ -454,6 +599,17 @@
    0.05,
    0,
    0,
+   0,
+   0
+  ],
+  [
+   "sunoapi/suno_get_lyrics",
+   132,
+   0,
+   0,
+   0,
+   0.02,
+   0.31,
    0
   ],
   [
@@ -463,6 +619,17 @@
    0,
    0,
    0,
+   0,
+   0
+  ],
+  [
+   "fal/fal-ai/elevenlabs/speech-to-text",
+   1,
+   0,
+   0,
+   0,
+   0,
+   0.27,
    0
   ],
   [
@@ -472,15 +639,7 @@
    0,
    0,
    0,
-   0
-  ],
-  [
-   "minimax/MiniMax-M2.7-highspeed",
-   6,
    0,
-   0,
-   0,
-   0.25,
    0
   ],
   [
@@ -490,12 +649,14 @@
    0,
    0.24,
    0,
+   0,
    0
   ],
   [
    "fal/fal-ai/ltx-2.3/image-to-video/fast",
    1,
    0.24,
+   0,
    0,
    0,
    0,
@@ -508,12 +669,14 @@
    0,
    0.22,
    0,
+   0,
    0
   ],
   [
    "fal/fal-ai/bytedance/seedream/v5/lite/text-to-image",
    2,
    0.21,
+   0,
    0,
    0,
    0,
@@ -526,12 +689,14 @@
    0,
    0,
    0,
+   0,
    0
   ],
   [
    "fal/fal-ai/kandinsky5-pro/text-to-video",
    1,
    0.2,
+   0,
    0,
    0,
    0,
@@ -544,6 +709,7 @@
    0,
    0,
    0,
+   0,
    0
   ],
   [
@@ -552,6 +718,7 @@
    0,
    0,
    0.19,
+   0,
    0,
    0
   ],
@@ -562,13 +729,25 @@
    0,
    0.14,
    0,
+   0,
    0
+  ],
+  [
+   "wavespeed/bytedance/seedream-v5.0-pro",
+   3,
+   0,
+   0,
+   0,
+   0,
+   0,
+   0.12
   ],
   [
    "atlas/qwen/qwen-image-2.0/text-to-image",
    3,
    0,
    0.08,
+   0,
    0,
    0,
    0
@@ -580,6 +759,27 @@
    0,
    0,
    0,
+   0,
+   0
+  ],
+  [
+   "wavespeed/bytedance/seed-speech-tts-2.0",
+   2,
+   0,
+   0,
+   0,
+   0,
+   0.06,
+   0
+  ],
+  [
+   "sunoapi/suno_generate_V4",
+   1,
+   0,
+   0,
+   0,
+   0,
+   0.06,
    0
   ],
   [
@@ -589,6 +789,7 @@
    0,
    0,
    0.04,
+   0,
    0
   ],
   [
@@ -598,12 +799,14 @@
    0,
    0,
    0.02,
+   0,
    0
   ],
   [
    "fal/xai/grok-imagine-image",
    2,
    0.04,
+   0,
    0,
    0,
    0,
@@ -616,12 +819,14 @@
    0,
    0,
    0,
+   0,
    0
   ],
   [
    "fal/fal-ai/flux-2-pro",
    1,
    0.03,
+   0,
    0,
    0,
    0,
@@ -634,21 +839,34 @@
    0,
    0,
    0.03,
+   0,
    0
   ],
   [
-   "sunoapi/suno_get_lyrics",
-   8,
+   "sunoapi/suno_sounds_V5_5",
+   2,
    0,
    0,
    0,
-   0.02,
+   0,
+   0.03,
+   0
+  ],
+  [
+   "fal/fal-ai/zonos2",
+   1,
+   0,
+   0,
+   0,
+   0,
+   0.01,
    0
   ],
   [
    "fal/fal-ai/f5-tts",
    1,
    0.01,
+   0,
    0,
    0,
    0,
@@ -661,6 +879,7 @@
    0,
    0,
    0,
+   0,
    0
   ],
   [
@@ -670,12 +889,14 @@
    0,
    0,
    0.01,
+   0,
    0
   ],
   [
    "fal/fal-ai/flux-2/klein/4b/base",
    1,
    0.01,
+   0,
    0,
    0,
    0,
@@ -688,6 +909,7 @@
    0,
    0,
    0,
+   0,
    0
   ],
   [
@@ -697,12 +919,14 @@
    0,
    0,
    0.0,
+   0,
    0
   ],
   [
    "fal/fal-ai/any-llm/enterprise",
    1,
    0.0,
+   0,
    0,
    0,
    0,
@@ -715,6 +939,7 @@
    0,
    0,
    0.0,
+   0,
    0
   ],
   [
@@ -724,12 +949,14 @@
    0,
    0.0,
    0,
+   0,
    0
   ],
   [
    "fal/fal-ai/minimax/speech-02-hd/voice_clone",
    1,
    0.0,
+   0,
    0,
    0,
    0,
@@ -742,12 +969,14 @@
    0,
    0,
    0,
+   0,
    0
   ],
   [
    "fal/fal-ai/minimax/speech-02-hd/voice-clone",
    1,
    0.0,
+   0,
    0,
    0,
    0,
@@ -760,12 +989,14 @@
    0.0,
    0,
    0,
+   0,
    0
   ],
   [
    "fal/fal-ai/elevenlabs/tts/eleven-multilingual-v2",
    1,
    0.0,
+   0,
    0,
    0,
    0,
@@ -778,6 +1009,7 @@
    0,
    0,
    0,
+   0,
    0
   ],
   [
@@ -785,14 +1017,6 @@
    1,
    0.0,
    0,
-   0,
-   0,
-   0
-  ],
-  [
-   "anthropic/Claude Haiku 3",
-   0,
-   0.0,
    0,
    0,
    0,
@@ -805,6 +1029,7 @@
    0,
    0,
    0.0,
+   0,
    0
   ]
  ]

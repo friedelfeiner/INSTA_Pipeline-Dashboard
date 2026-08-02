@@ -329,16 +329,13 @@ function stateOf(s) {
 // ── Laden ────────────────────────────────────────────────────
 async function load() {
   try {
-    const [stileRes, urlRes, localRes] = await Promise.all([
+    const [stileRes, urlRows] = await Promise.all([
       fetch(`${SUPABASE_URL}/rest/v1/stile?select=*&order=name`, { headers: HEADERS }),
-      fetch(`${SUPABASE_URL}/rest/v1/fotos?select=tagesstil,bildgen_url,foto_nr&bildgen_url=not.is.null&order=foto_nr&limit=3000`, { headers: HEADERS }),
-      fetch(`${SUPABASE_URL}/rest/v1/fotos?select=tagesstil,bildgen_datei,foto_nr&bildgen_datei=not.is.null&bildgen_url=is.null&order=foto_nr&limit=3000`, { headers: HEADERS }),
+      fetchAll('fotos?select=tagesstil,bildgen_url,foto_nr&bildgen_url=not.is.null&order=foto_nr'),
     ]);
     STILE = await stileRes.json();
-    const urlRows = await urlRes.json();
-    const localRows = await localRes.json();
 
-    // Bilder pro Style sammeln: review_bilder > bildgen_url > bildgen_datei(file://), max 5
+    // Bilder pro Style sammeln: review_bilder zuerst, dann bildgen_url
     IMAGES = {};
     const add = (style, src) => {
       if (!style || !src) return;
@@ -349,7 +346,6 @@ async function load() {
       if (Array.isArray(s.review_bilder)) s.review_bilder.forEach(u => add(s.name, u));
     });
     urlRows.forEach(r => add(r.tagesstil, r.bildgen_url));
-    localRows.forEach(r => add(r.tagesstil, fileUrl(r.bildgen_datei)));
 
     buildChips();
     render();
@@ -360,8 +356,19 @@ async function load() {
   }
 }
 
-function fileUrl(p) {
-  return 'file://' + p.split('/').map(encodeURIComponent).join('/');
+// PostgREST liefert maximal 1000 Zeilen pro Anfrage (ein &limit=3000 wird
+// stillschweigend gekappt). Deshalb seitenweise über Range-Header holen.
+async function fetchAll(path, pageSize = 1000) {
+  const out = [];
+  for (let from = 0; ; from += pageSize) {
+    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      headers: { ...HEADERS, Range: `${from}-${from + pageSize - 1}` },
+    });
+    if (!res.ok) throw new Error(`${res.status} ${await res.text()}`);
+    const page = await res.json();
+    out.push(...page);
+    if (page.length < pageSize) return out;
+  }
 }
 
 // ── Chips ────────────────────────────────────────────────────

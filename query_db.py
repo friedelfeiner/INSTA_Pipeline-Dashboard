@@ -13,5 +13,4 @@ def fetch_table(name):
         print(f"Error {name}:", e)
 
 fetch_table('stile')
-fetch_table('styles')
 fetch_table('fotos')
