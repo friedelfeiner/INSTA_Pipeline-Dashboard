@@ -1622,10 +1622,11 @@ const PROGRESS_UNIT = {
   audio:    (c, t) => `Spur ${c} von ${t}`,
 };
 
-// G5: reel_varianten wird heute immer als jsonb-String geschrieben (Hitl1Panel.freigeben
-// bleibt dabei — das ist die kanonische Schreibform). Käme künftig eine echte Liste an,
-// würde JSON.parse(array) im try/catch still zu [] werden — deshalb hier den Array-Fall
-// zuerst behandeln, statt ihn stumm zu verschlucken.
+// G1 (Pipeline-Robustheit, 26.08.): reel_varianten ist seit der Migration eine echte
+// jsonb-Liste — das ist ab jetzt die kanonische Form, und Hitl1Panel.freigeben schreibt
+// sie auch so. Der String-Zweig unten bleibt nur für Altzeilen stehen, die noch als
+// doppelt verpackter jsonb-String in der DB liegen; der Array-Fall kommt zuerst, sonst
+// würde JSON.parse(array) im try/catch still zu [] werden.
 function parseReelVarianten(v) {
   if (Array.isArray(v)) return v;
   if (!v) return [];
@@ -2886,7 +2887,9 @@ function Hitl1Panel({ etappe, onFreigegeben }) {
     const patch = {
       hitl1_entschieden_um: new Date().toISOString(),
       hitl_prio_stil: prioStil || null,
-      reel_varianten: JSON.stringify(patchVarianten),
+      // G1: als echte Liste übergeben — patchEtappe serialisiert den Body ohnehin, ein
+      // JSON.stringify hier landete als doppelt verpackter String in der jsonb-Spalte.
+      reel_varianten: patchVarianten,
       startort: startort.trim() || null,
       zielort: zielort.trim() || null,
     };
@@ -3075,7 +3078,7 @@ function TabHitl1() {
             Keine offenen Etappen — Vorschau:
           </div>
           <Hitl1Panel etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', startort: '', zielort: '',
-            reel_varianten: JSON.stringify([{ stil: 'ki_narrator', erzaehler_lang: '' }]),
+            reel_varianten: [{ stil: 'ki_narrator', erzaehler_lang: '' }],
             hitl_prio_stil: null, hitl1_entschieden_um: null }}
             onFreigegeben={onFreigegeben} />
         </React.Fragment>
@@ -3258,7 +3261,7 @@ function TabHitl2() {
           Kein Reel wartet auf Freigabe — Vorschau:
         </div>
         <Hitl2Veto etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', pipeline_status: 'reel_freigabe',
-          post_geplant_um: null, veto: false, reel_varianten: JSON.stringify([{ stil: '—', reel_datei: null, instagram_caption: '' }]) }}
+          post_geplant_um: null, veto: false, reel_varianten: [{ stil: '—', reel_datei: null, instagram_caption: '' }] }}
           onVeto={laden} />
       </div>
     );
