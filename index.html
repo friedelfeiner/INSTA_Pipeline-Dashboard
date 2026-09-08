@@ -3298,6 +3298,93 @@ function Hitl2Kuerraum({ etappe, onAenderung }) {
   );
 }
 
+// C2: Diese Karte ist ausschließlich der lokale Prüf-Ersatz, solange kein offener
+// Kürlauf vorliegt. Ihre Handler ändern nur React-State; sie darf weder die Live-
+// Funktionen noch eine Netzwerk-/Schreiboperation aufrufen.
+const KUERRAUM_SIMULATION_VARIANTEN = [
+  { stil: 'ki_narrator', reel_datei: 'tag-42-ki-narrator.mp4', duration_sec: 74, ftp_url: 'https://example.invalid/kuerraum-simulation/tag-42-ki-narrator.mp4' },
+  { stil: 'impact', reel_datei: 'tag-42-impact.mp4', duration_sec: 68, ftp_url: 'https://example.invalid/kuerraum-simulation/tag-42-impact.mp4' },
+  { stil: 'selfie_first', reel_datei: 'tag-42-selfie-first.mp4', duration_sec: 79, ftp_url: 'https://example.invalid/kuerraum-simulation/tag-42-selfie-first.mp4' },
+  { stil: 'song', reel_datei: 'tag-42-song.mp4', duration_sec: 83, ftp_url: 'https://example.invalid/kuerraum-simulation/tag-42-song.mp4' },
+  { stil: 'original_images', reel_datei: 'tag-42-original-images.mp4', duration_sec: 77, ftp_url: 'https://example.invalid/kuerraum-simulation/tag-42-original-images.mp4' },
+];
+
+function Hitl2KuerraumSimulation() {
+  const [jetzt, setJetzt] = React.useState(() => Date.now());
+  const [gewaehlt, setGewaehlt] = React.useState('impact'); // Rotations-Default für diese lokale Probe.
+  const [status, setStatus] = React.useState(null);
+  const ende = React.useRef(Date.now() + 10 * 60 * 1000).current;
+  const verbleibendeSekunden = Math.max(0, Math.ceil((ende - jetzt) / 1000));
+  const minuten = Math.floor(verbleibendeSekunden / 60);
+  const sekunden = String(verbleibendeSekunden % 60).padStart(2, '0');
+
+  React.useEffect(() => {
+    const iv = setInterval(() => setJetzt(Date.now()), 1000);
+    return () => clearInterval(iv);
+  }, []);
+
+  function waehlePrio(stil) {
+    setGewaehlt(stil);
+    setStatus(`Lokal bestätigt: ${stil} ist nur in dieser Simulation als Prio gewählt.`);
+  }
+
+  return (
+    <div style={{ maxWidth: 680, background: T.surface, borderRadius: 12, border: `2px solid ${T.warn}`, padding: 24, marginBottom: 20 }}>
+      <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: '0 0 8px', color: T.ink }}>
+        Kürraum-Simulation — Tag 42 (lokale Beispieldaten)
+      </h2>
+      <div style={{ background: T.warnSoft, border: `1px solid ${T.warn}`, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontFamily: T.sans }}>
+        <b style={{ color: T.warn }}>Simulation – keine Veröffentlichung</b>
+        <span style={{ color: T.muted }}> — keine Daten geladen oder gespeichert, keine Freigabe/Veto-Aktion wird übertragen.</span>
+      </div>
+      <div style={{ background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontFamily: T.sans }}>
+        <b style={{ color: T.accentInk }}>Zehn-Minuten-Countdown: noch {minuten}:{sekunden} Min</b>
+        <span style={{ color: T.muted }}> — Default: impact (Rotations-Default)</span>
+      </div>
+
+      {KUERRAUM_SIMULATION_VARIANTEN.map(v => {
+        const istGewaehlt = gewaehlt === v.stil;
+        const istPrioFaehig = istPrioFaehigeKuerVariante(v);
+        return (
+          <div key={v.stil} style={{ border: `1.5px solid ${istGewaehlt ? T.accent : T.border}`, background: istGewaehlt ? T.accentSoft : T.surface, borderRadius: 8, padding: 14, marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 150, flex: 1 }}>
+                <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.ink }}>{v.stil}</div>
+                <div style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, marginTop: 3 }}>Dauer: {fmtDur(v.duration_sec)}</div>
+              </div>
+              <a href={v.ftp_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+                style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '7px 11px', borderRadius: 7, border: `1px solid ${T.border}`, color: T.accentInk, background: T.surface, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                Vorschau öffnen ↗
+              </a>
+              {istPrioFaehig ? (
+                <button onClick={() => waehlePrio(v.stil)}
+                  style={{ fontFamily: T.sans, fontSize: 12, fontWeight: istGewaehlt ? 700 : 600, padding: '7px 11px', borderRadius: 7, border: `1.5px solid ${istGewaehlt ? T.accent : T.border}`, cursor: 'pointer', background: istGewaehlt ? T.accent : T.surface, color: istGewaehlt ? '#fff' : T.muted, whiteSpace: 'nowrap' }}>
+                  {istGewaehlt ? '★ Lokal gewählt' : 'Lokal als Prio wählen'}
+                </button>
+              ) : <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, whiteSpace: 'nowrap' }}>Nur Vorschau</span>}
+            </div>
+          </div>
+        );
+      })}
+
+      {status && <div style={{ marginTop: 10, background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 8, padding: '10px 14px', fontSize: 13, fontFamily: T.sans, color: T.accentInk, fontWeight: 600 }}>✓ {status}</div>}
+      <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 18, paddingTop: 14 }}>
+        <button onClick={() => setStatus('Simulation: Freigabe markiert, aber nichts wird veröffentlicht.')}
+          style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: 'pointer', background: T.accent, color: '#fff' }}>
+          ✅ Freigabe simulieren
+        </button>
+        <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 18, paddingTop: 14 }}>
+          <div style={{ fontSize: 11, fontFamily: T.sans, color: T.muted, marginBottom: 7 }}>Nachgeordnete lokale Notbremse</div>
+          <button onClick={() => setStatus('Simulation: Veto markiert, aber nichts wird gespeichert oder veröffentlicht.')}
+            style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '8px 13px', borderRadius: 8, border: `1px solid ${T.err}`, cursor: 'pointer', background: T.surface, color: T.err }}>
+            Nichts veröffentlichen (Veto simulieren)
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TabHitl2() {
   const [etappen, setEtappen] = React.useState([]);
   const [loading, setLoading] = React.useState(true);
@@ -3317,11 +3404,9 @@ function TabHitl2() {
       <div>
         <div style={{ padding: '10px 16px', marginBottom: 16, background: T.surfaceAlt, border: `1px solid ${T.border}`,
           borderRadius: 8, fontSize: 13, color: T.muted, fontFamily: T.sans }}>
-          Kein Reel wartet auf Freigabe — Vorschau:
+          Kein Reel wartet auf Freigabe — lokale Simulation:
         </div>
-        <Hitl2Kuerraum etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', pipeline_status: 'reel_freigabe',
-          post_geplant_um: null, veto: false, freigabe: false, reel_varianten: [] }}
-          onAenderung={laden} />
+        <Hitl2KuerraumSimulation />
       </div>
     );
   }
