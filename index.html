@@ -3128,75 +3128,143 @@ function TabHitl1() {
 
 // ─── HITL #2 ─────────────────────────────────────────────────────────────────
 async function fetchEtappenFuerHitl2() {
-  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,post_geplant_um,veto,freigabe,reel_varianten,hitl_prio_stil';
+  const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,post_geplant_um,veto,freigabe,reel_varianten,hitl_prio_stil,hitl2_prio_stil';
   const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=${cols}&pipeline_status=eq.reel_freigabe&order=datum.desc&limit=10`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
   return res.json();
 }
 
-function Hitl2Veto({ etappe, onVeto }) {
+const HITL2_PRIO_STILE = new Set(['ki_narrator', 'impact', 'selfie_first', 'song', 'song_en']);
+
+function istGueltigeHttpsUrl(wert) {
+  if (typeof wert !== 'string') return false;
+  try { return new URL(wert).protocol === 'https:'; }
+  catch { return false; }
+}
+
+function kuerVarianten(reelVarianten) {
+  return parseReelVarianten(reelVarianten).filter(v =>
+    v && typeof v.stil === 'string' && typeof v.reel_datei === 'string' && v.reel_datei.trim()
+      && istGueltigeHttpsUrl(v.ftp_url)
+  );
+}
+
+function istPrioFaehigeKuerVariante(v) {
+  return HITL2_PRIO_STILE.has(v.stil) && (typeof v.duration_sec !== 'number' || v.duration_sec <= 90);
+}
+
+async function setzeHitl2Prio(etappeId, stil) {
+  const token = new URLSearchParams(window.location.search).get('hitl_token') || '';
+  if (!token) return { ok: false, error: 'Sicherer Kürraum-Link fehlt — bitte die ntfy-Nachricht erneut öffnen.' };
+  const params = new URLSearchParams({ token, etappe: etappeId, action: 'prio', stil });
+  try {
+    const res = await fetch(`${FUNCTIONS_URL}/hitl-action?${params}`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
+    });
+    const text = await res.text();
+    return { ok: res.ok, error: res.ok ? null : (text || `HTTP ${res.status}`) };
+  } catch (err) {
+    return { ok: false, error: `Netzwerkfehler: ${err.message}` };
+  }
+}
+
+function Hitl2Kuerraum({ etappe, onAenderung }) {
   const ziel = etappe.post_geplant_um ? new Date(etappe.post_geplant_um) : null;
   const [now, setNow] = React.useState(new Date());
   const [saving, setSaving] = React.useState(false);
   const [fehler, setFehler] = React.useState(null);
+  const varianten = React.useMemo(() => kuerVarianten(etappe.reel_varianten), [etappe.reel_varianten]);
+  const prioVarianten = React.useMemo(() => varianten.filter(istPrioFaehigeKuerVariante), [varianten]);
+  const defaultStil = [etappe.hitl2_prio_stil, etappe.hitl_prio_stil]
+    .find(stil => prioVarianten.some(v => v.stil === stil)) || prioVarianten[0]?.stil || '';
+  const [gewaehlt, setGewaehlt] = React.useState(defaultStil);
 
   React.useEffect(() => {
     const iv = setInterval(() => setNow(new Date()), 10000);
     return () => clearInterval(iv);
   }, []);
+  React.useEffect(() => { setGewaehlt(defaultStil); }, [defaultStil]);
 
-  const offen = (!ziel || ziel > now) && !etappe.veto && !etappe.freigabe;
+  const offen = !!ziel && ziel > now && !etappe.veto && !etappe.freigabe;
   const verbleibend = ziel ? Math.max(0, Math.round((ziel - now) / 60000)) : null;
-
-  const varianten = parseReelVarianten(etappe.reel_varianten);
-  const prioVariante = varianten.find(v => v.stil === etappe.hitl_prio_stil) || varianten[0];
-
   const isPreview = etappe.id === '__preview__';
 
-  // Beide Pfade schreiben live auf einen Publish-Entscheid — ein verschluckter Fehler hieße hier,
-  // dass ein Veto nur in der UI passiert ist und das Reel trotzdem rausgeht.
-  async function patcheUndMelde(felder, was) {
+  // Alle Pfade schreiben live auf einen Publish-Entscheid. Sichtbarer Zustand wird
+  // erst nach bestätigter Antwort geändert; ein Fehler bleibt deshalb eindeutig lokal sichtbar.
+  async function schreibeUndMelde(schreiben, was, nachErfolg) {
     if (isPreview) return;
     setSaving(true); setFehler(null);
     try {
-      const res = await patchEtappe(etappe.id, felder);
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      onVeto?.();
+      const res = await schreiben();
+      if (!res.ok) throw new Error(res.error || `HTTP ${res.status}`);
+      nachErfolg?.();
+      onAenderung?.();
     } catch (err) {
       setFehler(`${was} fehlgeschlagen: ${err.message}`);
     } finally { setSaving(false); }
   }
 
-  const setzeVeto     = () => patcheUndMelde({ veto: true }, 'Veto');
-  const setzeFreigabe = () => patcheUndMelde({ freigabe: true }, 'Freigabe');
+  const setzeVeto     = () => schreibeUndMelde(() => patchEtappe(etappe.id, { veto: true }), 'Veto');
+  const setzeFreigabe = () => schreibeUndMelde(() => patchEtappe(etappe.id, { freigabe: true }), 'Freigabe');
+  const setzePrio     = stil => schreibeUndMelde(
+    () => setzeHitl2Prio(etappe.id, stil),
+    'Prio-Wahl',
+    () => setGewaehlt(stil),
+  );
 
   return (
-    <div style={{ maxWidth: 540, background: T.surface, borderRadius: 12, border: `2px solid ${offen ? T.accent : T.border}`, padding: 24, marginBottom: 20, opacity: isPreview ? 0.6 : 1 }}>
+    <div style={{ maxWidth: 680, background: T.surface, borderRadius: 12, border: `2px solid ${offen ? T.accent : T.border}`, padding: 24, marginBottom: 20, opacity: isPreview ? 0.6 : 1 }}>
       <h2 style={{ fontFamily: T.serif, fontSize: 20, fontWeight: 400, margin: '0 0 8px', color: T.ink }}>
-        Prio-Reel bereit — Tag {etappe.tag_nr || etappe.etappen_nr} ({etappe.datum})
+        Kürraum — Tag {etappe.tag_nr || etappe.etappen_nr} ({etappe.datum})
       </h2>
 
-      {prioVariante && (
-        <div style={{ fontSize: 13, fontFamily: T.mono, color: T.muted, marginBottom: 12 }}>
-          Stil: <b style={{ color: T.ink }}>{prioVariante.stil}</b>
-          {prioVariante.reel_datei && (
-            <div style={{ marginTop: 8, padding: '8px 10px', background: T.accentSoft, borderRadius: 6, fontSize: 12, fontFamily: T.sans, color: T.accentInk }}>
-              👀 Zum Anschauen: <b>Dropbox → 40_Finale_Reels</b><br/>
-              <span style={{ fontFamily: T.mono, fontSize: 11 }}>{prioVariante.reel_datei.split('/').pop()}</span>
+      <div style={{ background: T.warnSoft, border: `1px solid ${T.warn}`, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontFamily: T.sans }}>
+        {ziel ? (
+          <React.Fragment>
+            <b style={{ color: T.warn }}>Automatische Veröffentlichung um {ziel.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</b>
+            {verbleibend !== null && <span style={{ color: T.muted }}> — noch {verbleibend} Min</span>}
+          </React.Fragment>
+        ) : (
+          <b style={{ color: T.warn }}>Kein Zieldatum gesetzt — wartet auf Freigabe oder Veto</b>
+        )}
+      </div>
+
+      {varianten.length ? varianten.map(v => {
+        const istGewaehlt = gewaehlt === v.stil;
+        const istPrioFaehig = istPrioFaehigeKuerVariante(v);
+        return (
+          <div key={v.stil} style={{ border: `1.5px solid ${istGewaehlt ? T.accent : T.border}`, background: istGewaehlt ? T.accentSoft : T.surface, borderRadius: 8, padding: 14, marginBottom: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+              <div style={{ minWidth: 150, flex: 1 }}>
+                <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.ink }}>{v.stil}</div>
+                <div style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, marginTop: 3 }}>Dauer: {fmtDur(v.duration_sec)}</div>
+              </div>
+              <a href={v.ftp_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+                style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '7px 11px', borderRadius: 7, border: `1px solid ${T.border}`, color: T.accentInk, background: T.surface, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                Vorschau öffnen ↗
+              </a>
+              {istPrioFaehig ? (
+                <button onClick={() => setzePrio(v.stil)} disabled={saving || !offen || isPreview}
+                  style={{ fontFamily: T.sans, fontSize: 12, fontWeight: istGewaehlt ? 700 : 600, padding: '7px 11px', borderRadius: 7, border: `1.5px solid ${istGewaehlt ? T.accent : T.border}`, cursor: (saving || !offen || isPreview) ? 'not-allowed' : 'pointer', background: istGewaehlt ? T.accent : T.surface, color: istGewaehlt ? '#fff' : T.muted, whiteSpace: 'nowrap' }}>
+                  {istGewaehlt ? '★ Gewählt' : 'Als Prio wählen'}
+                </button>
+              ) : (
+                <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, whiteSpace: 'nowrap' }}>Nur Vorschau</span>
+              )}
             </div>
-          )}
-          {prioVariante.instagram_caption && (
-            <div style={{ marginTop: 6, fontFamily: T.sans, fontSize: 12, color: T.muted, fontStyle: 'italic', maxHeight: 60, overflow: 'hidden' }}>
-              {prioVariante.instagram_caption.slice(0, 160)}…
-            </div>
-          )}
+          </div>
+        );
+      }) : (
+        <div style={{ border: `1px solid ${T.border}`, borderRadius: 8, padding: '12px 14px', marginBottom: 12, fontSize: 13, fontFamily: T.sans, color: T.muted }}>
+          Noch keine fertig gerenderte Variante mit sicherer HTTPS-Vorschau verfügbar.
         </div>
       )}
 
       {etappe.veto ? (
         <div style={{ background: T.errSoft, border: `1px solid ${T.err}`, borderRadius: 8, padding: '10px 14px', fontSize: 13, fontFamily: T.sans, color: T.err, fontWeight: 600 }}>
-          ⛔ Veto gesetzt — Prio-Reel wird NICHT gepostet. Origbilder + Overnight laufen weiter.
+          ⛔ Veto gesetzt — Prio-Post und restliche Staffel sind gestoppt.
         </div>
       ) : etappe.freigabe ? (
         <div style={{ background: T.accentSoft, border: `1px solid ${T.accent}`, borderRadius: 8, padding: '10px 14px', fontSize: 13, fontFamily: T.sans, color: T.accentInk, fontWeight: 600 }}>
@@ -3204,24 +3272,15 @@ function Hitl2Veto({ etappe, onVeto }) {
         </div>
       ) : offen ? (
         <div>
-          <div style={{ background: T.warnSoft, border: `1px solid ${T.warn}`, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontFamily: T.sans }}>
-            {ziel ? (
-              <React.Fragment>
-                <b style={{ color: T.warn }}>Geht raus um {ziel.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit' })}</b>
-                {verbleibend !== null && <span style={{ color: T.muted }}> — noch {verbleibend} Min</span>}
-              </React.Fragment>
-            ) : (
-              <b style={{ color: T.warn }}>Kein Zieldatum gesetzt — wartet auf Freigabe oder Veto</b>
-            )}
-          </div>
-          <div style={{ display: 'flex', gap: 10, flexWrap: 'wrap' }}>
-            <button onClick={setzeFreigabe} disabled={saving || isPreview}
-              style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || isPreview) ? 'not-allowed' : 'pointer', background: isPreview ? T.surfaceAlt : T.accent, color: isPreview ? T.mutedSoft : '#fff' }}>
-              {saving ? '…' : '✅ Freigeben — sofort posten'}
-            </button>
+          <button onClick={setzeFreigabe} disabled={saving || isPreview || !gewaehlt}
+            style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || isPreview || !gewaehlt) ? 'not-allowed' : 'pointer', background: (isPreview || !gewaehlt) ? T.surfaceAlt : T.accent, color: (isPreview || !gewaehlt) ? T.mutedSoft : '#fff' }}>
+            {saving ? '…' : '✅ Jetzt veröffentlichen'}
+          </button>
+          <div style={{ borderTop: `1px solid ${T.border}`, marginTop: 18, paddingTop: 14 }}>
+            <div style={{ fontSize: 11, fontFamily: T.sans, color: T.muted, marginBottom: 7 }}>Notbremse für den gesamten Veröffentlichungsablauf</div>
             <button onClick={setzeVeto} disabled={saving || isPreview}
-              style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: (saving || isPreview) ? 'not-allowed' : 'pointer', background: isPreview ? T.surfaceAlt : T.err, color: isPreview ? T.mutedSoft : '#fff' }}>
-              {saving ? '…' : '⛔ Veto — Prio verwerfen'}
+              style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '8px 13px', borderRadius: 8, border: `1px solid ${T.err}`, cursor: (saving || isPreview) ? 'not-allowed' : 'pointer', background: T.surface, color: isPreview ? T.mutedSoft : T.err }}>
+              {saving ? '…' : 'Nichts veröffentlichen (Veto)'}
             </button>
           </div>
           {fehler && (
@@ -3260,9 +3319,9 @@ function TabHitl2() {
           borderRadius: 8, fontSize: 13, color: T.muted, fontFamily: T.sans }}>
           Kein Reel wartet auf Freigabe — Vorschau:
         </div>
-        <Hitl2Veto etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', pipeline_status: 'reel_freigabe',
-          post_geplant_um: null, veto: false, reel_varianten: [{ stil: '—', reel_datei: null, instagram_caption: '' }] }}
-          onVeto={laden} />
+        <Hitl2Kuerraum etappe={{ id: '__preview__', etappen_nr: '?', datum: '–', pipeline_status: 'reel_freigabe',
+          post_geplant_um: null, veto: false, freigabe: false, reel_varianten: [] }}
+          onAenderung={laden} />
       </div>
     );
   }
@@ -3270,7 +3329,7 @@ function TabHitl2() {
   return (
     <div>
       {etappen.map(e => (
-        <Hitl2Veto key={e.id} etappe={e} onVeto={laden} />
+        <Hitl2Kuerraum key={e.id} etappe={e} onAenderung={laden} />
       ))}
     </div>
   );
@@ -4008,15 +4067,16 @@ const ARCHIV_TABS = [
 const PIPELINE_TABS = [
   { id: 'monolog', label: 'Monolog',  Icon: ISend,      Content: () => <MonologPanel /> },
   { id: 'hitl1',   label: 'HITL #1', Icon: ISparkles,  Content: TabHitl1 },
-  { id: 'hitl2',   label: 'Veto',    Icon: IAlert,     Content: TabHitl2 },
+  { id: 'hitl2',   label: 'Kürraum', Icon: IAlert,     Content: TabHitl2 },
   { id: 'liverun', label: 'Live Run',Icon: IActivity,  Content: null },
 ];
 
 function App() {
   const mobile = useMobile();
   const [tab, setTab]         = useState('uebersicht');
-  const [mode, setMode] = useState('archiv');      // 'archiv' | 'pipeline' | 'stil-katalog'
-  const [pipelineTab, setPipelineTab] = useState('monolog');
+  const direkteAnsicht = new URLSearchParams(window.location.search).get('ansicht');
+  const [mode, setMode] = useState(direkteAnsicht === 'hitl2' ? 'pipeline' : 'archiv');      // 'archiv' | 'pipeline' | 'stil-katalog'
+  const [pipelineTab, setPipelineTab] = useState(direkteAnsicht === 'hitl2' ? 'hitl2' : 'monolog');
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(null);
