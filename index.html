@@ -629,6 +629,9 @@ const ITrendUp     = p => <Ic {...p} d={["M22 7L13.5 15.5 8.5 10.5 2 17","M16 7h
 const IActivity    = p => <Ic {...p} d={["M22 12h-2.48a2 2 0 0 0-1.93 1.46l-2.35 8.36a.25.25 0 0 1-.48 0L9.24 2.18a.25.25 0 0 0-.48 0l-2.35 8.36A2 2 0 0 1 4.49 12H2"]} />;
 const IImage       = p => <Ic {...p} d={["M5 3h14a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z","M9 11a2 2 0 1 0 0-4 2 2 0 0 0 0 4z","M21 15l-3.086-3.086a2 2 0 0 0-2.828 0L6 21"]} />;
 const ISend        = p => <Ic {...p} d={["M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"]} />;
+// C-Block Run-Abschluss: Ablage-Karte unter „Weitere Ergebnisse" — Pfade 1:1 aus
+// dem freigegebenen Entwurf (IC.box).
+const IBox         = p => <Ic {...p} d={["M21 8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z","m3.3 7 8.7 5 8.7-5"]} />;
 
 // Platform badges für "Publiziert"-Karte
 const PLATFORMS = [
@@ -637,7 +640,33 @@ const PLATFORMS = [
   { key: 'facebook',  label: 'FB', color: '#1877F2' },
 ];
 
-function PublishedKPI({ platforms }) {
+// C3 (Run-Abschluss): Der Entwurf zeigt hier den über alle Varianten aggregierten
+// Stand je Plattform mit ✓/~/! statt nur „live ja/nein". `stand` kommt aus
+// baueRunAbschluss(); fehlt er (alte Runs ohne platforms_ergebnis), bleibt die
+// bisherige Anzeige aus published_platforms stehen.
+function PublishedKPI({ platforms, stand, sub }) {
+  const hatStand = Array.isArray(stand) && stand.some(p => p.erfasst);
+  if (hatStand) return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
+        <div style={{ width: 28, height: 28, borderRadius: 8, background: T.accentSoft, display: 'flex', alignItems: 'center', justifyContent: 'center', color: T.accent }}>
+          <ISend size={14} sw={2} />
+        </div>
+        <span style={{ fontFamily: T.sans, fontSize: 12, color: T.muted, fontWeight: 500 }}>Publiziert</span>
+      </div>
+      <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap', marginBottom: 10 }}>
+        {stand.map(p => (
+          <div key={p.key} title={`${p.name}: ${p.mark === '✓' ? 'alle Varianten veröffentlicht oder eingeplant' : p.mark === '~' ? 'mindestens eine Variante übersprungen' : p.mark === '!' ? 'mindestens ein Fehlschlag' : 'nicht erfasst'}`}
+            style={{ display: 'flex', alignItems: 'center', gap: 5, padding: '6px 10px', borderRadius: 8,
+              background: p.bg, border: `1px solid ${p.border}` }}>
+            <span style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 700, color: p.fg }}>{p.badge}</span>
+            <span style={{ fontSize: 12, lineHeight: 1, color: p.fg }}>{p.mark}</span>
+          </div>
+        ))}
+      </div>
+      <div style={{ fontFamily: T.sans, fontSize: 12, color: T.muted }}>{sub || 'nicht erfasst'}</div>
+    </div>
+  );
   return (
     <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
       <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 14 }}>
@@ -677,11 +706,6 @@ function Pill({ state = 'ok', label }) {
     warn:    { bg: T.warnSoft,   fg: T.warn,   Icon: IAlert },
     error:   { bg: T.errSoft,    fg: T.err,    Icon: IAlert },
     running: { bg: T.accentSoft, fg: T.accentInk, Icon: IActivity },
-    // C-Block Run-Abschluss: 'eingeplant' ist kein laufender Prozess (running/IActivity
-    // wäre irreführend) und 'nicht erfasst' ist weder gut noch schlecht — beide brauchen
-    // einen eigenen, neutralen Zustand statt sich ok/error/warn falsch anzuziehen.
-    planned: { bg: T.accentSoft, fg: T.accentInk, Icon: IClock },
-    muted:   { bg: T.surfaceAlt, fg: T.mutedSoft, Icon: IClock },
   }[state] || { bg: T.okSoft, fg: T.ok, Icon: ICircleCheck };
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px',
@@ -871,10 +895,512 @@ function AllClearCard({ text = 'Keine Fehler · alle Runs sauber' }) {
   );
 }
 
+// ─── Run-Abschluss: Ableitung ─────────────────────────────────────────────────
+// Umsetzung des freigegebenen Entwurfs (INSTA_Pipeline/docs/vorhaben/2026-09-08-
+// run-abschluss-dashboard/Abschlussansicht_original-design.dc.html). Der Abschluss
+// ist ausdrücklich KEIN eigener Tab: er hängt unten an der Übersicht unter dem
+// Trenner „Abschluss dieses Runs". Statusvokabular, Farben und Texte stammen 1:1
+// aus dem Entwurf (ST-/PLAT-Objekt, renderVals()).
+
+// ST des Entwurfs. Der fünfte Wert „nicht erfasst" kommt dazu, weil alte Runs die
+// Felder gar nicht haben — der Entwurf kennt dafür keinen Status. Optisch neutral
+// wie „übersprungen", sagt aber ausdrücklich „nicht erfasst", statt einen Grund zu
+// erfinden.
+const AB_ST = {
+  veroeffentlicht: { label: 'Veröffentlicht', bg: '#DCFCE7', fg: '#15803D', mark: '✓' },
+  eingeplant:      { label: 'Eingeplant',     bg: '#F0E8FF', fg: '#4C1D95', mark: '◷' },
+  uebersprungen:   { label: 'Übersprungen',   bg: '#F6F3FB', fg: '#6E6780', mark: '–' },
+  fehlgeschlagen:  { label: 'Fehlgeschlagen', bg: '#FEE2E2', fg: '#B91C1C', mark: '!' },
+  nicht_erfasst:   { label: 'Nicht erfasst',  bg: '#F6F3FB', fg: '#9990A8', mark: '·' },
+};
+// blog_status/karussell_status sind (noch) nicht auf exakt dasselbe Vokabular
+// festgelegt — ein unbekannter, aber vorhandener Wert wird neutral mit seinem
+// Rohwert angezeigt statt stumm verschluckt.
+function abStatus(wert) {
+  if (!wert) return AB_ST.nicht_erfasst;
+  return AB_ST[wert] || { ...AB_ST.nicht_erfasst, label: String(wert) };
+}
+
+const AB_PLAT = {
+  instagram: { badge: 'IG', name: 'Instagram', color: '#E1306C', linkLabel: 'Reel öffnen' },
+  facebook:  { badge: 'FB', name: 'Facebook',  color: '#1877F2', linkLabel: 'Beitrag öffnen' },
+  youtube:   { badge: 'YT', name: 'YouTube',   color: '#FF0000', linkLabel: 'Video öffnen' },
+};
+const AB_ZEILEN_ORDER = ['instagram', 'facebook', 'youtube']; // Reihenfolge der Plattformzeilen im Entwurf
+const AB_KPI_ORDER    = ['instagram', 'youtube', 'facebook']; // Reihenfolge der Badges in der KPI-Kachel
+
+const AB_STIL_LABEL = {
+  original_images: 'Original-Reel', ki_narrator: 'KI-Narrator', impact: 'Impact',
+  selfie_first: 'Selfie First', song: 'Song (DE)', song_en: 'Song (EN)', rap: 'Rap',
+};
+function abStilLabel(stil) { return AB_STIL_LABEL[stil] || stil || 'Unbenannt'; }
+
+// publish_queue_oeffentlich kennt ein anderes Vokabular als
+// reel_varianten.platforms_ergebnis — hier auf das gemeinsame Vokabular der Ansicht
+// abbilden. pending/processing sind beide „noch nicht dran".
+function abQueueStatus(status) {
+  if (status === 'posted') return 'veroeffentlicht';
+  if (status === 'pending' || status === 'processing') return 'eingeplant';
+  if (status === 'vetoed') return 'uebersprungen';
+  if (status === 'error')  return 'fehlgeschlagen';
+  return 'nicht_erfasst';
+}
+
+// Der Entwurf schreibt Sekunden mit einer Nachkommastelle („51,7 s"), auch über
+// 90 s hinaus — fmtDur() würde daraus „1:33 Min" machen und die 90-s-Grenze
+// unlesbar verstecken.
+function abSekunden(sec) {
+  if (typeof sec !== 'number' || !isFinite(sec)) return null;
+  return `${sec.toFixed(1).replace('.', ',')} s`;
+}
+
+// Eine Zeile pro Plattform. Instagram kann mehrere Zeilen haben (der sofortige
+// Prio-Post aus platforms_ergebnis plus die Staffel-Slots aus der Warteschlange),
+// Facebook/YouTube je genau eine.
+function abZeilen(v, queueRows) {
+  const pe = (v && typeof v.platforms_ergebnis === 'object' && v.platforms_ergebnis) || {};
+  const zeilen = [];
+  const igQueue = (queueRows || [])
+    .filter(q => q && q.variante_stil === v.stil)
+    .sort((a, b) => (a.slot || 0) - (b.slot || 0));
+
+  if (pe.instagram) {
+    // platforms_ergebnis ist der direkte Versuch am Ende des Runs; eine Slotnummer
+    // trägt er nicht. Slots gibt es nur in der Warteschlange (2–5) — darum hier
+    // slot: null statt einer erfundenen 1.
+    zeilen.push({
+      plattform: 'instagram', slot: null,
+      status: pe.instagram.status || 'nicht_erfasst',
+      zeitpunkt: pe.instagram.scheduled_at || null,
+      link: istGueltigeHttpsUrl(pe.instagram.link) ? pe.instagram.link : null,
+      grund: pe.instagram.grund || null,
+    });
+  }
+  igQueue.forEach(q => {
+    const status = abQueueStatus(q.status);
+    zeilen.push({
+      plattform: 'instagram', slot: q.slot || null, status,
+      zeitpunkt: status === 'veroeffentlicht' ? (q.posted_at || null) : (q.due_at || null),
+      link: istGueltigeHttpsUrl(q.ig_permalink) ? q.ig_permalink : null,
+      grund: q.fehler_kurz || null,
+    });
+  });
+  if (!pe.instagram && !igQueue.length) {
+    zeilen.push({ plattform: 'instagram', slot: null, status: 'nicht_erfasst', zeitpunkt: null, link: null, grund: null });
+  }
+
+  ['facebook', 'youtube'].forEach(key => {
+    const p = pe[key];
+    zeilen.push({
+      plattform: key, slot: null,
+      status: (p && p.status) || 'nicht_erfasst',
+      zeitpunkt: (p && p.scheduled_at) || null,
+      link: p && istGueltigeHttpsUrl(p.link) ? p.link : null,
+      grund: (p && p.grund) || null,
+    });
+  });
+
+  return zeilen.sort((a, b) => AB_ZEILEN_ORDER.indexOf(a.plattform) - AB_ZEILEN_ORDER.indexOf(b.plattform));
+}
+
+// Gesamtstatus einer Variante über ihre Plattformzeilen. „Teilweise" deckt jede
+// Mischung ab, die noch nicht einheitlich fertig ist.
+function abGesamtStatus(zeilen) {
+  const relevant = zeilen.filter(z => z.status !== 'nicht_erfasst');
+  if (!relevant.length) return 'nicht_erfasst';
+  const alle = s => relevant.every(z => z.status === s);
+  if (alle('veroeffentlicht')) return 'veroeffentlicht';
+  if (alle('eingeplant'))      return 'eingeplant';
+  if (alle('uebersprungen'))   return 'uebersprungen';
+  if (alle('fehlgeschlagen'))  return 'fehlgeschlagen';
+  return relevant.some(z => z.status === 'veroeffentlicht' || z.status === 'eingeplant')
+    ? 'teilweise' : 'fehlgeschlagen';
+}
+
+// Urteil-Pille neben der H1 — Farben und Icon-Pfade 1:1 aus dem Entwurf.
+const AB_URTEIL = {
+  erfolgreich:    { label: 'Erfolgreich',    bg: '#DCFCE7', fg: '#15803D',
+                    icon: ['M22 11.08V12a10 10 0 1 1-5.93-9.14', 'm9 11 3 3L22 4'] },
+  eingeschraenkt: { label: 'Eingeschränkt',  bg: '#FEF3C7', fg: '#B45309',
+                    icon: ['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3', 'M12 9v4'] },
+  ohne_social:    { label: 'Kein Social-Output', bg: '#FEE2E2', fg: '#B91C1C',
+                    icon: ['m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3', 'M12 9v4'] },
+  nicht_erfasst:  { label: 'Nicht erfasst',  bg: '#F6F3FB', fg: '#6E6780',
+                    icon: ['M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20z', 'M12 6v6l4 2'] },
+};
+
+// Reine Ableitung: Rohdaten der Etappe + Queue-Zeilen → alle Anzeigewerte des
+// Entwurfs. Bewusst ohne React, damit sie mit Fixtures prüfbar ist.
+function baueRunAbschluss(etappe, queueRows) {
+  const rows = Array.isArray(queueRows) ? queueRows : [];
+  const roh = (etappe?.reelVarianten || []).filter(v => v && typeof v.stil === 'string');
+  // Das Original-Reel steht im Entwurf vorn (ORIGINAL_V / ORIGINAL_E). Bei uns ist
+  // es die Variante mit stil 'original_images'; gibt es sie nicht, fällt die Karte
+  // ersatzlos weg statt erfundene Daten zu zeigen.
+  const sortiert = [
+    ...roh.filter(v => v.stil === 'original_images'),
+    ...roh.filter(v => v.stil !== 'original_images'),
+  ];
+
+  const varianten = sortiert.map(v => {
+    const zeilen = abZeilen(v, rows);
+    const igSlots = zeilen.filter(z => z.plattform === 'instagram' && z.slot != null).map(z => z.slot);
+    const slotNr = igSlots.length ? Math.min(...igSlots) : null;
+    const sofort = slotNr == null && zeilen.some(z => z.slot == null && z.status !== 'nicht_erfasst');
+    const istOriginal = v.stil === 'original_images';
+    const gerendert = typeof v.reel_datei === 'string' && !!v.reel_datei.trim();
+    return {
+      stil: v.stil,
+      titel: abStilLabel(v.stil),
+      // Der Entwurf hat je Karte ein Slot-Abzeichen. Bei uns kommt die Nummer aus
+      // der Warteschlange; der direkte Versuch am Run-Ende heißt „Sofort".
+      slot: istOriginal ? 'Original' : (slotNr != null ? `Slot ${slotNr}` : sofort ? 'Sofort' : 'Kein Slot'),
+      reihenfolge: istOriginal ? 'Rohschnitt der Etappe'
+        : slotNr != null ? `${slotNr}. in der Reihenfolge`
+        : sofort ? 'direkt im Run verarbeitet'
+        : 'Reihenfolge nicht erfasst',
+      dauer: abSekunden(v.duration_sec) || 'Dauer nicht erfasst',
+      renderStatus: gerendert ? 'veroeffentlicht' : 'nicht_erfasst',
+      renderLabel:  gerendert ? 'Gerendert' : 'Nicht erfasst',
+      // Ablagezeit gibt es in unseren Daten nicht (Block B4) — der Entwurf zeigt
+      // dort „Dropbox · abgelegt 20:44", wir sagen ausdrücklich, dass die Zeit fehlt.
+      ablage: istGueltigeHttpsUrl(v.ftp_url) ? 'Ablage · Zeitpunkt nicht erfasst' : 'Ablage nicht erfasst',
+      vorschauUrl: istGueltigeHttpsUrl(v.ftp_url) ? v.ftp_url : null,
+      zeilen,
+      gesamtStatus: abGesamtStatus(zeilen),
+    };
+  });
+
+  // Pro Plattform über alle Varianten aggregiert: ! schlägt ~ schlägt ✓.
+  const alleZeilen = varianten.flatMap(v => v.zeilen);
+  const plattformStand = AB_KPI_ORDER.map(key => {
+    const m = AB_PLAT[key];
+    const alle = alleZeilen.filter(z => z.plattform === key && z.status !== 'nicht_erfasst');
+    if (!alle.length) return { key, badge: m.badge, name: m.name, mark: '·', erfasst: false,
+      bg: T.surfaceAlt, border: T.border, fg: T.mutedSoft };
+    const mark = alle.some(z => z.status === 'fehlgeschlagen') ? '!'
+      : alle.some(z => z.status === 'uebersprungen') ? '~' : '✓';
+    return { key, badge: m.badge, name: m.name, mark, erfasst: true,
+      bg: m.color + '18', border: m.color + '40', fg: m.color };
+  });
+
+  const erfasstePlattformen = plattformStand.filter(p => p.erfasst);
+  const mitFehler = erfasstePlattformen.filter(p => p.mark === '!').map(p => p.name);
+  const mitLuecke = erfasstePlattformen.filter(p => p.mark === '~').map(p => p.name);
+  const liveZahl  = erfasstePlattformen.filter(p => p.mark === '✓').length;
+  // „live" heißt veröffentlicht. Steht alles nur in der Warteschlange, sagt die
+  // Unterzeile das auch — der Haken allein würde sonst mehr versprechen, als da ist.
+  const etwasLive = alleZeilen.some(z => z.status === 'veroeffentlicht');
+  const plattformSub = !erfasstePlattformen.length ? 'nicht erfasst'
+    : mitFehler.length ? `${mitFehler.join(' · ')} offen`
+    : mitLuecke.length ? `${mitLuecke.join(' · ')} teilweise übersprungen`
+    : etwasLive ? `${liveZahl} Plattform${liveZahl === 1 ? '' : 'en'} live`
+    : `${liveZahl} Plattform${liveZahl === 1 ? '' : 'en'} eingeplant`;
+
+  // Weitere Ergebnisse: drei eigene Karten, wie im Entwurf.
+  const kar = etappe?.karussell || {};
+  const blogStatus = etappe?.blogUrl ? 'veroeffentlicht' : (etappe?.blogStatus || null);
+  const renderStatus = etappe?.renderdateiStatus === 'vorhanden' ? 'veroeffentlicht'
+    : (etappe?.renderdateiStatus || null);
+  const weitere = [
+    { id: 'karussell', titel: 'Facebook-Karussell', icon: 'dash',
+      status: kar.status || null, statusText: null,
+      zeit: fmtZeitpunktDE(kar.scheduledAt), grund: kar.grund || null,
+      link: istGueltigeHttpsUrl(kar.url) ? kar.url : null, linkLabel: 'Karussell öffnen' },
+    { id: 'blog', titel: 'Blog-Beitrag', icon: 'send',
+      status: blogStatus, statusText: null,
+      zeit: null, grund: null,
+      link: istGueltigeHttpsUrl(etappe?.blogUrl) ? etappe.blogUrl : null, linkLabel: 'Beitrag öffnen' },
+    // B4: es gibt keinen eigenen Dropbox-Ablage-Schritt mehr — wir haben nur den
+    // Status, weder Zeitpunkt noch Ordner-Link. Der Entwurf zeigt beides; das
+    // sagen wir hier offen, statt eine Zeit oder einen Link zu erfinden.
+    { id: 'ablage', titel: 'Dropbox-Ablage', icon: 'box',
+      status: renderStatus, statusText: renderStatus === 'veroeffentlicht' ? 'Abgelegt' : null,
+      zeit: null, grund: null, notiz: 'Zeitpunkt und Ordner-Link werden nicht erfasst.',
+      link: null, linkLabel: null },
+  ];
+
+  // Auffälligkeiten: rot für Fehlschläge, gelb für alles, was bewusst ausgelassen
+  // wurde. Ohne Eintrag zeigt die Karte den grünen Banner des Entwurfs.
+  const hinweise = [];
+  varianten.forEach(v => v.zeilen.forEach(z => {
+    if (z.status !== 'fehlgeschlagen' && z.status !== 'uebersprungen') return;
+    const p = AB_PLAT[z.plattform] || { name: z.plattform };
+    const slotText = z.slot != null && z.plattform === 'instagram' ? ` (Slot ${z.slot})` : '';
+    hinweise.push({
+      ton: z.status === 'fehlgeschlagen' ? 'err' : 'warn',
+      titel: `„${v.titel}" bei ${p.name}${slotText} ${z.status === 'fehlgeschlagen' ? 'fehlgeschlagen' : 'übersprungen'}`,
+      text: z.grund || 'Kein Grund erfasst.',
+      link: z.status === 'fehlgeschlagen' ? v.vorschauUrl : null,
+      linkLabel: 'Datei öffnen',
+    });
+  }));
+  weitere.forEach(w => {
+    if (w.status !== 'fehlgeschlagen' && w.status !== 'uebersprungen') return;
+    hinweise.push({
+      ton: w.status === 'fehlgeschlagen' ? 'err' : 'warn',
+      titel: `${w.titel}: ${abStatus(w.status).label.toLowerCase()}`,
+      text: w.grund || 'Kein Grund erfasst.',
+      link: w.link, linkLabel: w.linkLabel,
+    });
+  });
+
+  // Wichtigste manuelle Aktion: der erste rote Hinweis gewinnt — mehrere
+  // gleichzeitig anzuzeigen widerspräche „die wichtigste Aktion".
+  const ersterFehler = hinweise.find(h => h.ton === 'err') || null;
+  const aktion = ersterFehler ? {
+    titel: ersterFehler.titel,
+    text: ersterFehler.text,
+    link: ersterFehler.link, linkLabel: ersterFehler.linkLabel,
+  } : null;
+
+  // Urteil und Kurzzählung über die Varianten (Social-Außenresultat, nicht der
+  // technische pipeline_status — der steht schon als eigene Pille daneben).
+  const zaehlung = { veroeffentlicht: 0, eingeplant: 0, teilweise: 0, uebersprungen: 0, fehlgeschlagen: 0, nicht_erfasst: 0 };
+  varianten.forEach(v => { zaehlung[v.gesamtStatus] = (zaehlung[v.gesamtStatus] || 0) + 1; });
+  const erfassteVarianten = varianten.filter(v => v.gesamtStatus !== 'nicht_erfasst');
+  const urteilKey = !erfassteVarianten.length ? 'nicht_erfasst'
+    : (zaehlung.veroeffentlicht + zaehlung.eingeplant + zaehlung.teilweise) === 0 ? 'ohne_social'
+    : (zaehlung.teilweise + zaehlung.uebersprungen + zaehlung.fehlgeschlagen) > 0 ? 'eingeschraenkt'
+    : 'erfolgreich';
+
+  const teile = [];
+  if (zaehlung.veroeffentlicht) teile.push(`${zaehlung.veroeffentlicht} Reel${zaehlung.veroeffentlicht > 1 ? 's' : ''} veröffentlicht`);
+  if (zaehlung.eingeplant)      teile.push(`${zaehlung.eingeplant} eingeplant`);
+  if (zaehlung.teilweise)       teile.push(`${zaehlung.teilweise} teilweise eingeplant`);
+  if (zaehlung.uebersprungen)   teile.push(`${zaehlung.uebersprungen} übersprungen`);
+  if (zaehlung.fehlgeschlagen)  teile.push(`${zaehlung.fehlgeschlagen} fehlgeschlagen`);
+  const zusammenfassung = teile.length ? teile.join(' · ') : 'Kein Social-Ergebnis für diesen Run erfasst';
+
+  return {
+    erfasst: erfassteVarianten.length > 0,
+    hatVarianten: varianten.length > 0,
+    urteilKey, urteil: AB_URTEIL[urteilKey], zusammenfassung, zaehlung,
+    varianten, plattformStand, plattformSub, weitere, hinweise, aktion,
+  };
+}
+
+// Lädt die Instagram-Staffel gezielt für die gewählte Etappe (analog fetchSteps)
+// und leitet daraus den Abschluss ab. Einmal in App() aufgerufen, damit Kopfzeile
+// und Übersicht dieselbe Ableitung zeigen und die View nur einmal geladen wird.
+function useRunAbschluss(etappe) {
+  const [queueRows, setQueueRows] = React.useState([]);
+  const eid = etappe?.id || null;
+  React.useEffect(() => {
+    if (!eid) { setQueueRows([]); return; }
+    let aktiv = true;
+    setQueueRows([]);
+    fetchPublishQueue(eid)
+      .then(r => { if (aktiv) setQueueRows(Array.isArray(r) ? r : []); })
+      .catch(() => { if (aktiv) setQueueRows([]); });
+    return () => { aktiv = false; };
+  }, [eid]);
+  return React.useMemo(() => baueRunAbschluss(etappe, queueRows), [etappe, queueRows]);
+}
+
+// ─── Run-Abschluss: Darstellung ───────────────────────────────────────────────
+// Maße, Abstände und Farben folgen dem Entwurf. Das Karten-Raster ist schon dort
+// responsive (repeat(auto-fit, minmax(min(285px,100%),1fr))) — auf dem Handy
+// stapelt es von selbst, darum braucht es hier keine zweite, mobile Variante.
+const AB_TRENNER = '#F0EDF6';
+
+function AbLink({ href, label, auto }) {
+  if (!href || !label) return null;
+  return (
+    <a href={href} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+      style={{ fontSize: 11.5, fontWeight: 600, color: T.accent, textDecoration: 'none',
+        marginLeft: auto ? 'auto' : undefined, whiteSpace: 'nowrap' }}>
+      {label} ↗
+    </a>
+  );
+}
+
+function AbStatusPille({ status, label }) {
+  const s = abStatus(status);
+  return (
+    <span style={{ display: 'inline-flex', alignItems: 'center', padding: '2px 8px', borderRadius: 4,
+      background: s.bg, color: s.fg, fontSize: 11, fontWeight: 500, whiteSpace: 'nowrap' }}>
+      {label || s.label}
+    </span>
+  );
+}
+
+function AbPlattformZeile({ zeile }) {
+  const m = AB_PLAT[zeile.plattform] || { badge: '?', name: zeile.plattform, color: T.mutedSoft, linkLabel: 'Öffnen' };
+  const zeit = fmtZeitpunktDE(zeile.zeitpunkt, zeile.status === 'eingeplant');
+  const zeitText = zeit || (zeile.status === 'nicht_erfasst' ? null : 'Zeit nicht erfasst');
+  return (
+    <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 9px',
+      padding: '8px 0', borderTop: `1px solid ${AB_TRENNER}` }}>
+      <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: m.color,
+        background: m.color + '18', border: `1px solid ${m.color}40`, borderRadius: 5, padding: '2px 6px', flexShrink: 0 }}>
+        {m.badge}
+      </span>
+      {zeile.plattform === 'instagram' && zeile.slot != null && (
+        <span style={{ fontFamily: T.mono, fontSize: 10, color: T.mutedSoft }}>Slot {zeile.slot}</span>
+      )}
+      <AbStatusPille status={zeile.status} />
+      {zeitText && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, whiteSpace: 'nowrap' }}>{zeitText}</span>}
+      <AbLink href={zeile.link} label={zeile.status === 'veroeffentlicht' ? m.linkLabel : 'Vorschau'} auto />
+      {zeile.grund && (
+        <span style={{ flex: '1 1 100%', fontSize: 11.5, color: T.muted, lineHeight: 1.4 }}>{zeile.grund}</span>
+      )}
+    </div>
+  );
+}
+
+function AbVariantenKarte({ v }) {
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 9, flexWrap: 'wrap', marginBottom: 4 }}>
+        <span style={{ fontFamily: T.mono, fontSize: 10, fontWeight: 700, color: T.muted,
+          background: T.surfaceAlt, border: `1px solid ${T.border}`, borderRadius: 5, padding: '2px 7px' }}>{v.slot}</span>
+        <span style={{ fontFamily: T.serif, fontSize: 19, lineHeight: 1.1, color: T.ink }}>{v.titel}</span>
+        <span style={{ marginLeft: 'auto', display: 'flex', gap: 4 }}>
+          {v.zeilen.map((z, i) => {
+            const m = AB_PLAT[z.plattform] || { badge: '?' };
+            const s = abStatus(z.status);
+            return (
+              <span key={z.plattform + '-' + (z.slot ?? '') + '-' + i}
+                style={{ display: 'inline-flex', alignItems: 'center', gap: 3, padding: '2px 6px', borderRadius: 5,
+                  background: s.bg, border: `1px solid ${z.status === 'uebersprungen' || z.status === 'nicht_erfasst' ? T.border : s.fg + '33'}` }}>
+                <span style={{ fontFamily: T.mono, fontSize: 9.5, fontWeight: 700, color: s.fg }}>{m.badge}</span>
+                <span style={{ fontSize: 10, lineHeight: 1, color: s.fg }}>{s.mark}</span>
+              </span>
+            );
+          })}
+        </span>
+      </div>
+      <div style={{ fontSize: 11.5, color: T.mutedSoft, marginBottom: 11 }}>{v.reihenfolge}</div>
+      <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+        {v.zeilen.map((z, i) => <AbPlattformZeile key={z.plattform + '-' + (z.slot ?? '') + '-' + i} zeile={z} />)}
+      </div>
+    </div>
+  );
+}
+
+const AB_WEITERE_ICON = { dash: IDash, send: ISend, box: IBox };
+
+function AbWeitereKarte({ w }) {
+  const Icon = AB_WEITERE_ICON[w.icon] || IDash;
+  const s = abStatus(w.status);
+  return (
+    <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, minWidth: 0 }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 10 }}>
+        <span style={{ width: 26, height: 26, borderRadius: 8, background: s.bg, color: s.fg,
+          display: 'flex', alignItems: 'center', justifyContent: 'center', flexShrink: 0 }}>
+          <Icon size={13} sw={2} />
+        </span>
+        <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>{w.titel}</span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+        <AbStatusPille status={w.status} label={w.statusText} />
+        {w.zeit && <span style={{ fontFamily: T.mono, fontSize: 11.5, color: T.muted }}>{w.zeit}</span>}
+      </div>
+      {(w.grund || w.notiz) && (
+        <div style={{ fontSize: 12, color: w.grund ? T.muted : T.mutedSoft, marginTop: 8, lineHeight: 1.45 }}>
+          {w.grund || w.notiz}
+        </div>
+      )}
+      {w.link && <div style={{ marginTop: 8 }}><AbLink href={w.link} label={w.linkLabel} /></div>}
+    </div>
+  );
+}
+
+function AbschlussBereich({ abschluss }) {
+  const ab = abschluss;
+  if (!ab) return null;
+  return (
+    <>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 12, margin: '14px 0 2px' }}>
+        <span style={{ fontFamily: T.mono, fontSize: 10, letterSpacing: 0.8, textTransform: 'uppercase',
+          fontWeight: 600, color: T.accent }}>Abschluss dieses Runs</span>
+        <span style={{ flex: 1, height: 1, background: T.border }} />
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(285px, 100%), 1fr))',
+        gap: 12, alignItems: 'start' }}>
+
+        {/* Erzeugte Varianten — im Entwurf inklusive Original-Reel als erste Zeile */}
+        <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 16, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 11 }}>
+            <IImage size={14} sw={2} style={{ color: T.accent }} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Erzeugte Varianten</span>
+          </div>
+          {ab.varianten.length === 0 ? (
+            <div style={{ fontSize: 12, color: T.muted }}>Für diesen Run ist keine Variante erfasst.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+              {ab.varianten.map(v => (
+                <div key={v.stil} style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '6px 10px',
+                  padding: '8px 0', borderTop: `1px solid ${AB_TRENNER}` }}>
+                  <span style={{ fontSize: 12.5, fontWeight: 500, color: T.ink }}>{v.titel}</span>
+                  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{v.dauer}</span>
+                  <AbStatusPille status={v.renderStatus} label={v.renderLabel} />
+                  {v.vorschauUrl
+                    ? <AbLink href={v.vorschauUrl} label="Vorschau" auto />
+                    : <span style={{ marginLeft: 'auto', fontSize: 11, color: T.mutedSoft, whiteSpace: 'nowrap' }}>keine Vorschau</span>}
+                  <span style={{ flex: '1 1 100%', fontSize: 11.5, color: T.mutedSoft }}>{v.ablage}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+
+        {/* Wichtigste manuelle Aktion — nur wenn es eine gibt, volle Breite */}
+        {ab.aktion && (
+          <div style={{ gridColumn: '1 / -1', background: T.warnSoft, border: `1px solid #FDE68A`,
+            borderRadius: 12, padding: 16, borderLeft: `3px solid ${T.warn}`, minWidth: 0 }}>
+            <div style={{ fontFamily: T.mono, fontSize: 10, color: T.warn, textTransform: 'uppercase',
+              letterSpacing: 0.6, fontWeight: 600, marginBottom: 4 }}>Wichtigste manuelle Aktion</div>
+            <div style={{ fontSize: 13.5, fontWeight: 600, color: T.ink }}>{ab.aktion.titel}</div>
+            <div style={{ fontSize: 12, color: T.muted, marginTop: 4, lineHeight: 1.45 }}>{ab.aktion.text}</div>
+            {ab.aktion.link && <div style={{ marginTop: 7 }}><AbLink href={ab.aktion.link} label={ab.aktion.linkLabel} /></div>}
+          </div>
+        )}
+
+        {/* Eine Karte je Variante — inklusive Original-Reel als erste Karte */}
+        {ab.varianten.map(v => <AbVariantenKarte key={v.stil} v={v} />)}
+
+        {/* Weitere Ergebnisse: drei einzelne Karten */}
+        {ab.weitere.map(w => <AbWeitereKarte key={w.id} w={w} />)}
+
+        {/* Auffälligkeiten & offene Schritte, volle Breite */}
+        <div style={{ gridColumn: '1 / -1', background: T.surface, border: `1px solid ${T.border}`,
+          borderRadius: 12, padding: 16, minWidth: 0 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 11 }}>
+            <IShield size={14} sw={2} style={{ color: T.accent }} />
+            <span style={{ fontSize: 13, fontWeight: 600, color: T.ink }}>Auffälligkeiten &amp; offene Schritte</span>
+          </div>
+          {ab.hinweise.length === 0 ? (
+            <div style={{ padding: 13, background: T.okSoft, borderRadius: 8, borderLeft: `3px solid ${T.ok}`,
+              fontSize: 12.5, fontWeight: 500, color: T.ink }}>Kein manueller Schritt erforderlich</div>
+          ) : (
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(260px, 100%), 1fr))', gap: 8 }}>
+              {ab.hinweise.map((h, i) => (
+                <div key={i} style={{ padding: '12px 13px', background: h.ton === 'err' ? T.errSoft : T.warnSoft,
+                  borderRadius: 8, borderLeft: `3px solid ${h.ton === 'err' ? T.err : T.warn}` }}>
+                  <div style={{ fontSize: 12.5, fontWeight: 600, color: T.ink }}>{h.titel}</div>
+                  <div style={{ fontSize: 11.5, color: T.muted, marginTop: 4, lineHeight: 1.5 }}>{h.text}</div>
+                  {h.link && <div style={{ marginTop: 6 }}><AbLink href={h.link} label={h.linkLabel} /></div>}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
+}
+
 // ─── Tab content ──────────────────────────────────────────────────────────────
-function TabUebersicht({ data, selectedEtappe }) {
+function TabUebersicht({ data, selectedEtappe, abschluss }) {
   const mobile = useMobile();
   const latestE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
+  // App() reicht den Abschluss herein (eine Ableitung für Kopfzeile und Übersicht).
+  // Der Fallback greift nur, wenn die Übersicht ohne App-Kontext gerendert wird —
+  // dann ohne Instagram-Staffel, aber ohne Absturz.
+  const ab = abschluss || baueRunAbschluss(latestE, []);
   const ct = latestE?.cost || 1;
   const costPct = k => ct > 0 ? Math.round(((latestE?.[k] || 0) / ct) * 100) : 0;
   const dur = {
@@ -914,7 +1440,7 @@ function TabUebersicht({ data, selectedEtappe }) {
         <KPI icon={IRefresh} label="Retries"
           value={String(latestE?.retries ?? 0)}
           sub={fehlerSub(latestE?.errors)} />
-        <PublishedKPI platforms={latestE?.publishedPlatforms || []} />
+        <PublishedKPI platforms={latestE?.publishedPlatforms || []} stand={ab.plattformStand} sub={ab.plattformSub} />
       </div>
 
       <div style={{ display: 'grid', gridTemplateColumns: mobile ? '1fr' : '1.1fr 1fr', gap: 14 }}>
@@ -1017,6 +1543,10 @@ function TabUebersicht({ data, selectedEtappe }) {
           </div>
         </div>
       </Panel>
+
+      {/* C1: Der Abschluss dieses Runs hängt hier unten an der Übersicht an —
+          kein eigener Tab, keine zweite Kosten-/Performance-/Reliability-Ansicht. */}
+      <AbschlussBereich abschluss={ab} />
     </div>
   );
 }
@@ -3578,403 +4108,6 @@ function ReelVarianteRow({ r, feld, maxWert, historie }) {
   );
 }
 
-// ─── Tab: Abschluss (Run-Abschluss, C-Block 2026-09-08) ───────────────────────
-// Ausschließlich das Außenresultat auf Social — keine Agentenlaufzeiten, Modelle,
-// Retries oder Kosten (die leben in Reliability/Performance/Kosten). "Staffel" ist
-// hier kein eigener Bereich, sondern steckt in Slot/Reihenfolge je Plattformzeile.
-
-// Kanonisches 5-Werte-Vokabular für jeden Status in dieser Ansicht (Plattform,
-// Karussell, Blog, Renderdatei) — Detailregel 4 aus dem Plan. Unbekannte/fehlende
-// Werte fallen auf "nicht erfasst" statt eine falsche Farbe zu zeigen.
-const ABSCHLUSS_STATUS_META = {
-  veroeffentlicht:      { label: 'Veröffentlicht',        state: 'ok' },
-  eingeplant:           { label: 'Eingeplant',            state: 'planned' },
-  teilweise_eingeplant: { label: 'Teilweise eingeplant',  state: 'warn' },
-  uebersprungen:        { label: 'Übersprungen',          state: 'warn' },
-  fehlgeschlagen:       { label: 'Fehlgeschlagen',        state: 'error' },
-  nicht_erfasst:        { label: 'Nicht erfasst',         state: 'muted' },
-};
-function abschlussStatusMeta(status) {
-  if (!status) return ABSCHLUSS_STATUS_META.nicht_erfasst;
-  // blog_status/karussell_status/renderdatei_status sind (noch) nicht auf exakt
-  // dasselbe Vokabular festgelegt — ein unbekannter, aber vorhandener Wert wird
-  // trotzdem angezeigt (neutral), statt ihn stumm zu verschlucken.
-  return ABSCHLUSS_STATUS_META[status] || { label: status, state: 'muted' };
-}
-
-const ABSCHLUSS_PLATTFORM_META = {
-  instagram: { label: 'Instagram', color: '#E1306C' },
-  facebook:  { label: 'Facebook',  color: '#1877F2' },
-  youtube:   { label: 'YouTube',   color: '#FF0000' },
-};
-
-// D3/D4-Pendant für die Instagram-Staffel: publish_queue_oeffentlich kennt ein
-// anderes Vokabular als reel_varianten.platforms_ergebnis — hier auf das gemeinsame
-// Vokabular der Ansicht abbilden. pending/processing sind beide "noch nicht dran",
-// die Ansicht unterscheidet das nicht weiter (kein eigener Fortschrittsbalken hier).
-function mapQueueStatus(status) {
-  if (status === 'posted')  return 'veroeffentlicht';
-  if (status === 'pending' || status === 'processing') return 'eingeplant';
-  if (status === 'vetoed')  return 'uebersprungen';
-  if (status === 'error')   return 'fehlgeschlagen';
-  return 'nicht_erfasst';
-}
-
-// Baut für einen Stil eine Zeile pro Plattform. Instagram kann mehrere Zeilen haben
-// (Slot 1 aus platforms_ergebnis — der sofortige Prio-Post — plus Slot 2–5 aus der
-// Warteschlange), Facebook/YouTube je genau eine Zeile ohne Slot.
-function baueVariantenZeilen(v, queueRows) {
-  const pe = v.platforms_ergebnis || {};
-  const zeilen = [];
-
-  const igQueue = (queueRows || [])
-    .filter(q => q.variante_stil === v.stil)
-    .sort((a, b) => (a.slot || 0) - (b.slot || 0));
-
-  if (pe.instagram) {
-    const status = pe.instagram.status || 'nicht_erfasst';
-    zeilen.push({
-      plattform: 'instagram', slot: 1, status,
-      zeitpunkt: pe.instagram.scheduled_at || null,
-      link: pe.instagram.link || null,
-      grund: pe.instagram.grund || null,
-    });
-  }
-  igQueue.forEach(q => {
-    const status = mapQueueStatus(q.status);
-    zeilen.push({
-      plattform: 'instagram', slot: q.slot || null, status,
-      zeitpunkt: status === 'veroeffentlicht' ? (q.posted_at || null) : (q.due_at || null),
-      link: q.ig_permalink || null,
-      grund: q.fehler_kurz || null,
-    });
-  });
-  if (!pe.instagram && igQueue.length === 0) {
-    zeilen.push({ plattform: 'instagram', slot: null, status: 'nicht_erfasst', zeitpunkt: null, link: null, grund: null });
-  }
-
-  ['facebook', 'youtube'].forEach(key => {
-    const p = pe[key];
-    zeilen.push({
-      plattform: key, slot: null,
-      status: p?.status || 'nicht_erfasst',
-      zeitpunkt: p?.scheduled_at || null,
-      link: p?.link || null,
-      grund: p?.grund || null,
-    });
-  });
-
-  return zeilen;
-}
-
-// Gesamtstatus einer Variante über alle ihre Plattformzeilen. "Teilweise eingeplant"
-// deckt jede Mischung ab, die noch nicht einheitlich fertig ist — das deckt sich mit
-// dem Beispiel aus dem Brief ("1 teilweise eingeplant").
-function gesamtStatusVariante(zeilen) {
-  const relevant = zeilen.filter(z => z.status !== 'nicht_erfasst');
-  if (!relevant.length) return 'nicht_erfasst';
-  const alle = s => relevant.every(z => z.status === s);
-  if (alle('veroeffentlicht')) return 'veroeffentlicht';
-  if (alle('eingeplant'))      return 'eingeplant';
-  if (alle('uebersprungen'))   return 'uebersprungen';
-  if (alle('fehlgeschlagen'))  return 'fehlgeschlagen';
-  const hatVerOderEin = relevant.some(z => z.status === 'veroeffentlicht' || z.status === 'eingeplant');
-  return hatVerOderEin ? 'teilweise_eingeplant' : 'fehlgeschlagen';
-}
-
-function baueVariantenResultat(reelVarianten, queueRows) {
-  return (reelVarianten || [])
-    .filter(v => v && typeof v.stil === 'string')
-    .map(v => {
-      const zeilen = baueVariantenZeilen(v, queueRows);
-      return {
-        stil: v.stil,
-        reel_datei: v.reel_datei || null,
-        duration_sec: typeof v.duration_sec === 'number' ? v.duration_sec : null,
-        ftp_url: istGueltigeHttpsUrl(v.ftp_url) ? v.ftp_url : null,
-        zeilen,
-        gesamtStatus: gesamtStatusVariante(zeilen),
-      };
-    });
-}
-
-// Produktbezogenes Urteil (C2) — richtet sich nach dem Social-Außenresultat, NICHT
-// nach statusMap()/pipeline_status (das ist ein anderes, technisches Urteil und lebt
-// in der Übersicht). Ohne jede erfasste Variante: "nicht erfasst" (alte Runs, Detailregel 4).
-function ableiteAbschlussUrteil(varianten) {
-  const zaehlung = { veroeffentlicht: 0, eingeplant: 0, teilweise_eingeplant: 0, uebersprungen: 0, fehlgeschlagen: 0, nicht_erfasst: 0 };
-  varianten.forEach(v => { zaehlung[v.gesamtStatus] = (zaehlung[v.gesamtStatus] || 0) + 1; });
-
-  const erfasst = varianten.filter(v => v.gesamtStatus !== 'nicht_erfasst');
-  let urteil;
-  if (!erfasst.length) {
-    urteil = 'nicht_erfasst';
-  } else if (zaehlung.veroeffentlicht === 0 && zaehlung.eingeplant === 0 && zaehlung.teilweise_eingeplant === 0) {
-    urteil = 'fehlgeschlagen'; // kein Social-Output
-  } else if (zaehlung.uebersprungen > 0 || zaehlung.fehlgeschlagen > 0 || zaehlung.teilweise_eingeplant > 0) {
-    urteil = 'eingeschraenkt'; // Teilerfolg
-  } else {
-    urteil = 'erfolgreich';
-  }
-
-  const teile = [];
-  if (zaehlung.veroeffentlicht) teile.push(`${zaehlung.veroeffentlicht} Reel${zaehlung.veroeffentlicht > 1 ? 's' : ''} veröffentlicht`);
-  if (zaehlung.eingeplant) teile.push(`${zaehlung.eingeplant} eingeplant`);
-  if (zaehlung.teilweise_eingeplant) teile.push(`${zaehlung.teilweise_eingeplant} teilweise eingeplant`);
-  if (zaehlung.uebersprungen) teile.push(`${zaehlung.uebersprungen} übersprungen`);
-  if (zaehlung.fehlgeschlagen) teile.push(`${zaehlung.fehlgeschlagen} fehlgeschlagen`);
-  const zusammenfassung = teile.length ? teile.join(' · ') : 'Keine Reel-Varianten für diesen Run erfasst';
-
-  return { urteil, zusammenfassung, zaehlung };
-}
-
-const ABSCHLUSS_URTEIL_META = {
-  erfolgreich:   { label: 'Erfolgreich',   fg: T.ok,   bg: T.okSoft,   Icon: ICircleCheck },
-  eingeschraenkt:{ label: 'Eingeschränkt', fg: T.warn, bg: T.warnSoft, Icon: IAlert },
-  fehlgeschlagen:{ label: 'Fehlgeschlagen',fg: T.err,  bg: T.errSoft,  Icon: IAlert },
-  nicht_erfasst: { label: 'Nicht erfasst', fg: T.mutedSoft, bg: T.surfaceAlt, Icon: IClock },
-};
-
-// Wichtigste manuelle Aktion: der erste Fehler mit Grund gewinnt — mehrere gleichzeitig
-// anzuzeigen widerspräche "die wichtigste Aktion" aus dem Brief. null → "Kein manueller
-// Schritt erforderlich".
-function wichtigsteAktion(varianten, karussell) {
-  for (const v of varianten) {
-    for (const z of v.zeilen) {
-      if (z.status === 'fehlgeschlagen') {
-        const plattform = ABSCHLUSS_PLATTFORM_META[z.plattform]?.label || z.plattform;
-        return `${plattform} für „${v.stil}" prüfen${z.grund ? ': ' + z.grund : ''}`;
-      }
-    }
-  }
-  if (karussell?.status === 'fehlgeschlagen') {
-    return `Facebook-Karussell prüfen${karussell.grund ? ': ' + karussell.grund : ''}`;
-  }
-  return null;
-}
-
-function PlattformZeile({ zeile, mobile }) {
-  const meta = ABSCHLUSS_PLATTFORM_META[zeile.plattform] || { label: zeile.plattform, color: T.mutedSoft };
-  const statusMeta = abschlussStatusMeta(zeile.status);
-  const zeitText = fmtZeitpunktDE(zeile.zeitpunkt, zeile.status === 'eingeplant');
-  const zeigeLinkPlatzhalter = !zeile.link && zeile.status === 'eingeplant';
-  return (
-    <div style={{
-      display: 'flex', alignItems: mobile ? 'flex-start' : 'center', gap: mobile ? 6 : 10,
-      flexDirection: mobile ? 'column' : 'row', flexWrap: mobile ? 'nowrap' : 'wrap',
-      padding: mobile ? '10px 12px' : '8px 2px',
-      border: mobile ? `1px solid ${T.border}` : 'none',
-      borderBottom: !mobile ? `1px solid ${T.border}` : undefined,
-      borderRadius: mobile ? 8 : 0,
-      background: mobile ? T.surfaceAlt : 'transparent',
-    }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: mobile ? undefined : 118, flexShrink: 0 }}>
-        <span style={{ width: 8, height: 8, borderRadius: 2, background: meta.color, flexShrink: 0 }} />
-        <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: T.ink }}>{meta.label}</span>
-        {zeile.slot ? <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>Slot {zeile.slot}</span> : null}
-      </div>
-      <Pill state={statusMeta.state} label={statusMeta.label} />
-      {zeitText && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, whiteSpace: 'nowrap' }}>{zeitText}</span>}
-      {zeile.grund && <span style={{ fontFamily: T.sans, fontSize: 11.5, color: T.muted, flex: mobile ? undefined : 1 }}>{zeile.grund}</span>}
-      {zeile.link ? (
-        <a href={zeile.link} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
-          style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
-          {zeile.status === 'veroeffentlicht' ? 'Reel öffnen ↗' : 'Vorschau ↗'}
-        </a>
-      ) : zeigeLinkPlatzhalter ? (
-        // Detailregel 2: vor Veröffentlichung ohne öffentlichen Link steht das explizit da,
-        // statt einfach nichts anzuzeigen.
-        <span style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 11, color: T.mutedSoft, fontStyle: 'italic', whiteSpace: 'nowrap' }}>Link erst nach Veröffentlichung</span>
-      ) : null}
-    </div>
-  );
-}
-
-function VariantenKarte({ v, mobile }) {
-  const auffaellig = v.gesamtStatus === 'fehlgeschlagen' || v.gesamtStatus === 'uebersprungen' || v.gesamtStatus === 'teilweise_eingeplant';
-  const [offen, setOffen] = React.useState(auffaellig);
-  // publish_queue_oeffentlich (Instagram-Staffel-Slots) lädt erst nach dem ersten
-  // Render nach — ohne diesen Sync bliebe eine Karte kollabiert, die erst durch die
-  // nachgeladenen Slots "auffällig" wird. Ein manueller Klick gewinnt danach immer.
-  const nutzerHatGeklickt = React.useRef(false);
-  React.useEffect(() => {
-    if (!nutzerHatGeklickt.current) setOffen(auffaellig);
-  }, [auffaellig]);
-  const gesamtMeta = abschlussStatusMeta(v.gesamtStatus);
-  return (
-    <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
-      <button onClick={() => { nutzerHatGeklickt.current = true; setOffen(o => !o); }} style={{
-        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
-        padding: '12px 14px', background: offen ? T.surfaceAlt : T.surface, border: 'none', cursor: 'pointer', textAlign: 'left',
-      }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
-          <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.ink }}>{v.stil}</span>
-          <Pill state={gesamtMeta.state} label={gesamtMeta.label} />
-        </div>
-        <span style={{ fontFamily: T.mono, fontSize: 15, color: T.muted, flexShrink: 0 }}>{offen ? '−' : '+'}</span>
-      </button>
-      {offen && (
-        <div style={{ padding: mobile ? '10px 12px 14px' : '4px 16px 14px', display: 'flex', flexDirection: 'column', gap: mobile ? 8 : 0 }}>
-          {v.zeilen.map((z, i) => <PlattformZeile key={z.plattform + '|' + (z.slot ?? '') + '|' + i} zeile={z} mobile={mobile} />)}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function TabAbschluss({ data, selectedEtappe }) {
-  const mobile = useMobile();
-  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
-  const [queueRows, setQueueRows] = React.useState([]);
-
-  React.useEffect(() => {
-    if (!curE?.id) { setQueueRows([]); return; }
-    let aktiv = true;
-    fetchPublishQueue(curE.id).then(rows => { if (aktiv) setQueueRows(rows); }).catch(() => { if (aktiv) setQueueRows([]); });
-    return () => { aktiv = false; };
-  }, [curE?.id]);
-
-  if (!curE) return <Panel><div style={{ color: T.muted, fontSize: 13 }}>Keine Etappe gewählt.</div></Panel>;
-
-  const varianten = React.useMemo(() => baueVariantenResultat(curE.reelVarianten, queueRows), [curE.reelVarianten, queueRows]);
-  const abschluss = React.useMemo(() => ableiteAbschlussUrteil(varianten), [varianten]);
-  const aktion = React.useMemo(() => wichtigsteAktion(varianten, curE.karussell), [varianten, curE.karussell]);
-  const urteilMeta = ABSCHLUSS_URTEIL_META[abschluss.urteil] || ABSCHLUSS_URTEIL_META.nicht_erfasst;
-
-  const karussellMeta = abschlussStatusMeta(curE.karussell?.status);
-  const blogMeta = abschlussStatusMeta(curE.blogUrl ? 'veroeffentlicht' : curE.blogStatus);
-  const renderMeta = abschlussStatusMeta(curE.renderdateiStatus);
-
-  return (
-    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
-      {/* C2: großes produktbezogenes Urteil + Kurzzählung + wichtigster Handgriff */}
-      <Panel style={{ background: urteilMeta.bg, borderColor: urteilMeta.fg + '33', padding: mobile ? 18 : 24 }}>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 10 }}>
-          <urteilMeta.Icon size={mobile ? 26 : 32} sw={2} style={{ color: urteilMeta.fg, flexShrink: 0 }} />
-          <div style={{ fontFamily: T.serif, fontSize: mobile ? 26 : 38, fontWeight: 400, color: urteilMeta.fg, lineHeight: 1 }}>
-            {urteilMeta.label}
-          </div>
-        </div>
-        <div style={{ fontFamily: T.sans, fontSize: 13.5, color: T.ink }}>{abschluss.zusammenfassung}</div>
-        {aktion ? (
-          <div style={{ marginTop: 12, background: T.surface, border: `1px solid ${T.warn}`, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, fontFamily: T.sans, color: T.warn, fontWeight: 600 }}>
-            ➜ {aktion}
-          </div>
-        ) : (
-          <div style={{ marginTop: 12, background: T.surface, border: `1px solid ${T.ok}`, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, fontFamily: T.sans, color: T.ok, fontWeight: 600 }}>
-            ✓ Kein manueller Schritt erforderlich
-          </div>
-        )}
-      </Panel>
-
-      {/* C3: Social-Resultat nach Variante und Slot */}
-      <Panel>
-        <PanelHeader icon={ISend} label="Social-Resultat" serif="Nach Variante & Slot" />
-        {varianten.length === 0 ? (
-          <div style={{ color: T.muted, fontSize: 13 }}>Keine Reel-Varianten für diesen Run erfasst.</div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-            {varianten.map(v => <VariantenKarte key={v.stil} v={v} mobile={mobile} />)}
-          </div>
-        )}
-      </Panel>
-
-      {/* Erzeugte Varianten: kompakt, Stil/Dauer/Ablage/Vorschau */}
-      <Panel>
-        <PanelHeader icon={IImage} label="Erzeugte Varianten" serif="Stil, Dauer, Ablage" />
-        {varianten.length === 0 ? (
-          <div style={{ color: T.muted, fontSize: 13 }}>Keine Varianten erfasst.</div>
-        ) : (
-          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-            {varianten.map(v => {
-              const abgelegt = !!(v.reel_datei && v.ftp_url);
-              return (
-                <div key={v.stil} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 2px', borderBottom: `1px solid ${T.border}` }}>
-                  <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink, minWidth: 140 }}>{v.stil}</span>
-                  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{v.duration_sec != null ? fmtDur(v.duration_sec) : '–'}</span>
-                  <Pill state={abgelegt ? 'ok' : 'warn'} label={abgelegt ? 'Abgelegt' : 'Fehlt'} />
-                  {v.ftp_url ? (
-                    <a href={v.ftp_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
-                      style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                      Vorschau öffnen ↗
-                    </a>
-                  ) : (
-                    <span style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 11, color: T.mutedSoft, fontStyle: 'italic' }}>Keine Vorschau verfügbar</span>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </Panel>
-
-      {/* Weitere Ergebnisse: Karussell, Blog, Renderdatei */}
-      <Panel>
-        <PanelHeader icon={IDash} label="Weitere Ergebnisse" serif="Karussell, Blog, Renderdatei" />
-        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '6px 2px' }}>
-            <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink, minWidth: 150 }}>Facebook-Karussell</span>
-            <Pill state={karussellMeta.state} label={karussellMeta.label} />
-            {fmtZeitpunktDE(curE.karussell?.scheduledAt) && (
-              <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{fmtZeitpunktDE(curE.karussell?.scheduledAt)}</span>
-            )}
-            {curE.karussell?.grund && <span style={{ fontFamily: T.sans, fontSize: 11.5, color: T.muted }}>{curE.karussell.grund}</span>}
-            {curE.karussell?.url ? (
-              <a href={curE.karussell.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
-                style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                Beitrag öffnen ↗
-              </a>
-            ) : null}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '6px 2px' }}>
-            <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink, minWidth: 150 }}>Blog</span>
-            <Pill state={blogMeta.state} label={blogMeta.label} />
-            {curE.blogUrl ? (
-              <a href={curE.blogUrl} target="_blank" rel="noopener noreferrer"
-                style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
-                Blog-Beitrag öffnen ↗
-              </a>
-            ) : null}
-          </div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '6px 2px' }}>
-            <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink, minWidth: 150 }}>Renderdatei / Dropbox</span>
-            <Pill state={renderMeta.state} label={renderMeta.label} />
-          </div>
-        </div>
-      </Panel>
-
-      {/* Auffälligkeiten & offene Schritte in normaler Sprache */}
-      <Panel>
-        <PanelHeader icon={IAlert} label="Auffälligkeiten & offene Schritte" />
-        {(() => {
-          const auffaelligkeiten = [];
-          varianten.forEach(v => v.zeilen.forEach(z => {
-            if (z.status === 'fehlgeschlagen' || z.status === 'uebersprungen') {
-              const plattform = ABSCHLUSS_PLATTFORM_META[z.plattform]?.label || z.plattform;
-              const slotText = z.slot ? ` (Slot ${z.slot})` : '';
-              auffaelligkeiten.push(
-                `${v.stil}${slotText} · ${plattform}: ${z.status === 'fehlgeschlagen' ? 'fehlgeschlagen' : 'übersprungen'}${z.grund ? ' — ' + z.grund : ''}`
-              );
-            }
-          }));
-          if (curE.karussell?.status === 'fehlgeschlagen' || curE.karussell?.status === 'uebersprungen') {
-            auffaelligkeiten.push(`Facebook-Karussell: ${curE.karussell.status === 'fehlgeschlagen' ? 'fehlgeschlagen' : 'übersprungen'}${curE.karussell.grund ? ' — ' + curE.karussell.grund : ''}`);
-          }
-          return auffaelligkeiten.length === 0 ? (
-            <div style={{ fontSize: 13, color: T.ok, fontFamily: T.sans, fontWeight: 500 }}>Kein manueller Schritt erforderlich.</div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
-              {auffaelligkeiten.map((text, i) => (
-                <div key={i} style={{ fontSize: 13, color: T.ink, fontFamily: T.sans, lineHeight: 1.5 }}>• {text}</div>
-              ))}
-            </div>
-          );
-        })()}
-      </Panel>
-    </div>
-  );
-}
-
 // ─── Tab: Reels (Reichweite der Varianten der gewählten Etappe) ───────────────
 // E2a: TabReels() nahm bis zum Umbau keine Props entgegen und ignorierte damit
 // selectedEtappe komplett — der Tab zeigte immer den globalen Schnitt über alle
@@ -4587,7 +4720,6 @@ function ProviderRow({ p, max, fmtEur, track }) {
 }
 
 const ARCHIV_TABS = [
-  { id: 'abschluss',   label: 'Abschluss',   Icon: ICircleCheck, Content: TabAbschluss },
   { id: 'uebersicht',  label: 'Übersicht',   Icon: IDash,      Content: TabUebersicht },
   { id: 'kosten',      label: 'Kosten',      Icon: ICoins,     Content: TabKosten },
   { id: 'stylereview', label: 'Style',        Icon: ISparkles,  Content: TabStyleReview },
@@ -4688,6 +4820,12 @@ function App() {
     const ziel = viewList[i];
     if (ziel) setSelectedId(ziel.id);
   }, [viewList]);
+
+  // C1/C2 Run-Abschluss: einmal zentral abgeleitet, damit die Urteil-Pille in der
+  // Kopfzeile und der angehängte Bereich in der Übersicht dasselbe zeigen und die
+  // Instagram-Staffel nur einmal geladen wird. Muss vor den frühen Returns stehen,
+  // sonst wäre die Hook-Reihenfolge nicht stabil.
+  const runAbschluss = useRunAbschluss(viewList[curIdx] || null);
 
   React.useEffect(() => {
     const handler = e => {
@@ -4948,11 +5086,25 @@ function App() {
               {datumZeile}
               {mobile && <div style={{ marginLeft: 'auto', flexShrink: 0 }}>{navArrows}</div>}
             </div>
-            <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
               <h1 style={{ fontFamily: T.serif, fontSize: mobile ? 22 : 34, fontWeight: 400, margin: 0, letterSpacing: -0.5, lineHeight: 1.1, minWidth: 0, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: mobile ? 'normal' : 'nowrap' }}>
                 {curEtappe.name.split('→')[0].trim()} <span style={{ color: T.accent, fontStyle: 'italic' }}>→</span> {curEtappe.name.split('→')[1]?.trim()}
               </h1>
               <Pill state={curEtappe?.status || data.status} label={curEtappe?.status || data.status} />
+              {/* C2: Urteil über das Social-Außenresultat, direkt neben der H1 wie im
+                  Entwurf. Erscheint nur, wenn für diesen Run überhaupt etwas erfasst
+                  ist — sonst stünde auf jeder alten Etappe eine graue Pille ohne Aussage.
+                  Die Pille links daneben bleibt der technische pipeline_status. */}
+              {runAbschluss?.erfasst && (
+                <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6, padding: '3px 10px', borderRadius: 4,
+                  background: runAbschluss.urteil.bg, color: runAbschluss.urteil.fg, fontSize: 11, fontWeight: 600 }}>
+                  <Ic d={runAbschluss.urteil.icon} size={12} sw={2.2} />
+                  {runAbschluss.urteil.label}
+                </span>
+              )}
+              {runAbschluss?.erfasst && (
+                <span style={{ fontSize: 13, color: T.muted }}>{runAbschluss.zusammenfassung}</span>
+              )}
               {curEtappe?.blogUrl && (
                 <a href={curEtappe.blogUrl} target="_blank" rel="noopener noreferrer"
                   style={{ fontSize: 12, color: T.accent, textDecoration: 'none', whiteSpace: 'nowrap' }}>
@@ -5024,7 +5176,7 @@ function App() {
         : <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
             {activeTab === 'liverun'
               ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} latestEtappe={data?.etappenList?.find(e => e.id === data.latestId) || data?.etappenList?.[data.etappenList.length - 1]} />
-              : activeContent?.Content ? <activeContent.Content data={viewData} selectedEtappe={curEtappe} /> : null
+              : activeContent?.Content ? <activeContent.Content data={viewData} selectedEtappe={curEtappe} abschluss={runAbschluss} /> : null
             }
           </div>
       }
