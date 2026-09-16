@@ -168,6 +168,11 @@ async function fetchEtappen() {
     'cost_video_eur','cost_tts_eur','duration_total_s','agent_timings_s',
     'retries','errors','photos_input','photos_selected','t2i_count','video_count','published_platforms',
     'unit_counts','dauer_min','hoehenmeter_auf','hoehenmeter_ab','blog_url',
+    // C-Block Run-Abschluss (2026-09-08): reel_varianten trägt jetzt platforms_ergebnis
+    // je Stil, die übrigen Felder sind die Nebenkanäle (Karussell/Blog/Renderdatei).
+    'reel_varianten','instagram_permalink','blog_status','blog_post_id',
+    'karussell_status','karussell_scheduled_at','karussell_post_id','karussell_url','karussell_grund',
+    'renderdatei_status',
   ].join(',');
   return fetchAll(`etappen?select=${cols}&order=datum.desc`);
 }
@@ -189,6 +194,17 @@ async function fetchLatestRun() {
 
 async function fetchSteps(etappeId) {
   const url = `${SUPABASE_URL}/rest/v1/pipeline_steps?etappe_id=eq.${etappeId}&order=ts.asc`;
+  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  if (!res.ok) return [];
+  return res.json();
+}
+
+// C3 Run-Abschluss: die Instagram-Staffel-Slots 2–5 stehen nicht in reel_varianten,
+// sondern in dieser View — pro ausgewählter Etappe gezielt geladen (analog fetchSteps),
+// nicht für die ganze Liste, sonst würde jede Auswahl 1000+ Zeilen mitschleppen.
+async function fetchPublishQueue(etappeId) {
+  const cols = 'etappe_id,slot,variante_stil,due_at,status,posted_at,ig_permalink,fehler_kurz';
+  const url = `${SUPABASE_URL}/rest/v1/publish_queue_oeffentlich?etappe_id=eq.${etappeId}&select=${cols}&order=slot.asc`;
   const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
   if (!res.ok) return [];
   return res.json();
@@ -382,6 +398,20 @@ function transformData(rows, routeMap = {}) {
       hoehenmeterAb:  e.hoehenmeter_ab ?? null,
       // I3
       blogUrl:  e.blog_url || null,
+      // C-Block Run-Abschluss: Nebenkanäle des Runs neben dem eigentlichen Reel.
+      // reel_varianten wird hier einmalig geparst statt in jeder Tab-Komponente neu.
+      reelVarianten: parseReelVarianten(e.reel_varianten),
+      instagramPermalink: e.instagram_permalink || null,
+      blogStatus:   e.blog_status   || null,
+      blogPostId:   e.blog_post_id  || null,
+      karussell: {
+        status:      e.karussell_status       || null,
+        scheduledAt: e.karussell_scheduled_at || null,
+        postId:      e.karussell_post_id      || null,
+        url:         e.karussell_url          || null,
+        grund:       e.karussell_grund        || null,
+      },
+      renderdateiStatus: e.renderdatei_status || null,
       photos_input:    e.photos_input    || 0,
       photos_selected: e.photos_selected || 0,
       t2i:      e.t2i_count   || 0,
@@ -647,6 +677,11 @@ function Pill({ state = 'ok', label }) {
     warn:    { bg: T.warnSoft,   fg: T.warn,   Icon: IAlert },
     error:   { bg: T.errSoft,    fg: T.err,    Icon: IAlert },
     running: { bg: T.accentSoft, fg: T.accentInk, Icon: IActivity },
+    // C-Block Run-Abschluss: 'eingeplant' ist kein laufender Prozess (running/IActivity
+    // wäre irreführend) und 'nicht erfasst' ist weder gut noch schlecht — beide brauchen
+    // einen eigenen, neutralen Zustand statt sich ok/error/warn falsch anzuziehen.
+    planned: { bg: T.accentSoft, fg: T.accentInk, Icon: IClock },
+    muted:   { bg: T.surfaceAlt, fg: T.mutedSoft, Icon: IClock },
   }[state] || { bg: T.okSoft, fg: T.ok, Icon: ICircleCheck };
   return (
     <span style={{ display: 'inline-flex', alignItems: 'center', gap: 5, padding: '3px 10px',
@@ -2566,6 +2601,20 @@ function fmtDatumDE(iso) {
   return `${d}.${m}.${y}`;
 }
 
+// C-Block Run-Abschluss: Timestamps aus reel_varianten/publish_queue kommen als
+// UTC-ISO — Flo liest lokale Uhrzeit (Europe/Vienna), nicht UTC.
+function fmtZeitpunktDE(iso, mitZone) {
+  if (!iso) return null;
+  const d = new Date(iso);
+  if (isNaN(d.getTime())) return null;
+  const datum = d.toLocaleDateString('de-DE', { day: '2-digit', month: '2-digit', timeZone: 'Europe/Vienna' });
+  const zeit  = d.toLocaleTimeString('de-DE', { hour: '2-digit', minute: '2-digit', timeZone: 'Europe/Vienna' });
+  if (!mitZone) return `${datum} ${zeit}`;
+  const teile = new Intl.DateTimeFormat('de-DE', { timeZone: 'Europe/Vienna', timeZoneName: 'short' }).formatToParts(d);
+  const tz = teile.find(p => p.type === 'timeZoneName')?.value || '';
+  return `${datum} ${zeit}${tz ? ' ' + tz : ''}`;
+}
+
 function MonologListeItem({ e, aktiv, hideKuerzel, onPick }) {
   const route = e.route || {};
   const kuerzel = route.kuerzel || '—';
@@ -3529,6 +3578,403 @@ function ReelVarianteRow({ r, feld, maxWert, historie }) {
   );
 }
 
+// ─── Tab: Abschluss (Run-Abschluss, C-Block 2026-09-08) ───────────────────────
+// Ausschließlich das Außenresultat auf Social — keine Agentenlaufzeiten, Modelle,
+// Retries oder Kosten (die leben in Reliability/Performance/Kosten). "Staffel" ist
+// hier kein eigener Bereich, sondern steckt in Slot/Reihenfolge je Plattformzeile.
+
+// Kanonisches 5-Werte-Vokabular für jeden Status in dieser Ansicht (Plattform,
+// Karussell, Blog, Renderdatei) — Detailregel 4 aus dem Plan. Unbekannte/fehlende
+// Werte fallen auf "nicht erfasst" statt eine falsche Farbe zu zeigen.
+const ABSCHLUSS_STATUS_META = {
+  veroeffentlicht:      { label: 'Veröffentlicht',        state: 'ok' },
+  eingeplant:           { label: 'Eingeplant',            state: 'planned' },
+  teilweise_eingeplant: { label: 'Teilweise eingeplant',  state: 'warn' },
+  uebersprungen:        { label: 'Übersprungen',          state: 'warn' },
+  fehlgeschlagen:       { label: 'Fehlgeschlagen',        state: 'error' },
+  nicht_erfasst:        { label: 'Nicht erfasst',         state: 'muted' },
+};
+function abschlussStatusMeta(status) {
+  if (!status) return ABSCHLUSS_STATUS_META.nicht_erfasst;
+  // blog_status/karussell_status/renderdatei_status sind (noch) nicht auf exakt
+  // dasselbe Vokabular festgelegt — ein unbekannter, aber vorhandener Wert wird
+  // trotzdem angezeigt (neutral), statt ihn stumm zu verschlucken.
+  return ABSCHLUSS_STATUS_META[status] || { label: status, state: 'muted' };
+}
+
+const ABSCHLUSS_PLATTFORM_META = {
+  instagram: { label: 'Instagram', color: '#E1306C' },
+  facebook:  { label: 'Facebook',  color: '#1877F2' },
+  youtube:   { label: 'YouTube',   color: '#FF0000' },
+};
+
+// D3/D4-Pendant für die Instagram-Staffel: publish_queue_oeffentlich kennt ein
+// anderes Vokabular als reel_varianten.platforms_ergebnis — hier auf das gemeinsame
+// Vokabular der Ansicht abbilden. pending/processing sind beide "noch nicht dran",
+// die Ansicht unterscheidet das nicht weiter (kein eigener Fortschrittsbalken hier).
+function mapQueueStatus(status) {
+  if (status === 'posted')  return 'veroeffentlicht';
+  if (status === 'pending' || status === 'processing') return 'eingeplant';
+  if (status === 'vetoed')  return 'uebersprungen';
+  if (status === 'error')   return 'fehlgeschlagen';
+  return 'nicht_erfasst';
+}
+
+// Baut für einen Stil eine Zeile pro Plattform. Instagram kann mehrere Zeilen haben
+// (Slot 1 aus platforms_ergebnis — der sofortige Prio-Post — plus Slot 2–5 aus der
+// Warteschlange), Facebook/YouTube je genau eine Zeile ohne Slot.
+function baueVariantenZeilen(v, queueRows) {
+  const pe = v.platforms_ergebnis || {};
+  const zeilen = [];
+
+  const igQueue = (queueRows || [])
+    .filter(q => q.variante_stil === v.stil)
+    .sort((a, b) => (a.slot || 0) - (b.slot || 0));
+
+  if (pe.instagram) {
+    const status = pe.instagram.status || 'nicht_erfasst';
+    zeilen.push({
+      plattform: 'instagram', slot: 1, status,
+      zeitpunkt: pe.instagram.scheduled_at || null,
+      link: pe.instagram.link || null,
+      grund: pe.instagram.grund || null,
+    });
+  }
+  igQueue.forEach(q => {
+    const status = mapQueueStatus(q.status);
+    zeilen.push({
+      plattform: 'instagram', slot: q.slot || null, status,
+      zeitpunkt: status === 'veroeffentlicht' ? (q.posted_at || null) : (q.due_at || null),
+      link: q.ig_permalink || null,
+      grund: q.fehler_kurz || null,
+    });
+  });
+  if (!pe.instagram && igQueue.length === 0) {
+    zeilen.push({ plattform: 'instagram', slot: null, status: 'nicht_erfasst', zeitpunkt: null, link: null, grund: null });
+  }
+
+  ['facebook', 'youtube'].forEach(key => {
+    const p = pe[key];
+    zeilen.push({
+      plattform: key, slot: null,
+      status: p?.status || 'nicht_erfasst',
+      zeitpunkt: p?.scheduled_at || null,
+      link: p?.link || null,
+      grund: p?.grund || null,
+    });
+  });
+
+  return zeilen;
+}
+
+// Gesamtstatus einer Variante über alle ihre Plattformzeilen. "Teilweise eingeplant"
+// deckt jede Mischung ab, die noch nicht einheitlich fertig ist — das deckt sich mit
+// dem Beispiel aus dem Brief ("1 teilweise eingeplant").
+function gesamtStatusVariante(zeilen) {
+  const relevant = zeilen.filter(z => z.status !== 'nicht_erfasst');
+  if (!relevant.length) return 'nicht_erfasst';
+  const alle = s => relevant.every(z => z.status === s);
+  if (alle('veroeffentlicht')) return 'veroeffentlicht';
+  if (alle('eingeplant'))      return 'eingeplant';
+  if (alle('uebersprungen'))   return 'uebersprungen';
+  if (alle('fehlgeschlagen'))  return 'fehlgeschlagen';
+  const hatVerOderEin = relevant.some(z => z.status === 'veroeffentlicht' || z.status === 'eingeplant');
+  return hatVerOderEin ? 'teilweise_eingeplant' : 'fehlgeschlagen';
+}
+
+function baueVariantenResultat(reelVarianten, queueRows) {
+  return (reelVarianten || [])
+    .filter(v => v && typeof v.stil === 'string')
+    .map(v => {
+      const zeilen = baueVariantenZeilen(v, queueRows);
+      return {
+        stil: v.stil,
+        reel_datei: v.reel_datei || null,
+        duration_sec: typeof v.duration_sec === 'number' ? v.duration_sec : null,
+        ftp_url: istGueltigeHttpsUrl(v.ftp_url) ? v.ftp_url : null,
+        zeilen,
+        gesamtStatus: gesamtStatusVariante(zeilen),
+      };
+    });
+}
+
+// Produktbezogenes Urteil (C2) — richtet sich nach dem Social-Außenresultat, NICHT
+// nach statusMap()/pipeline_status (das ist ein anderes, technisches Urteil und lebt
+// in der Übersicht). Ohne jede erfasste Variante: "nicht erfasst" (alte Runs, Detailregel 4).
+function ableiteAbschlussUrteil(varianten) {
+  const zaehlung = { veroeffentlicht: 0, eingeplant: 0, teilweise_eingeplant: 0, uebersprungen: 0, fehlgeschlagen: 0, nicht_erfasst: 0 };
+  varianten.forEach(v => { zaehlung[v.gesamtStatus] = (zaehlung[v.gesamtStatus] || 0) + 1; });
+
+  const erfasst = varianten.filter(v => v.gesamtStatus !== 'nicht_erfasst');
+  let urteil;
+  if (!erfasst.length) {
+    urteil = 'nicht_erfasst';
+  } else if (zaehlung.veroeffentlicht === 0 && zaehlung.eingeplant === 0 && zaehlung.teilweise_eingeplant === 0) {
+    urteil = 'fehlgeschlagen'; // kein Social-Output
+  } else if (zaehlung.uebersprungen > 0 || zaehlung.fehlgeschlagen > 0 || zaehlung.teilweise_eingeplant > 0) {
+    urteil = 'eingeschraenkt'; // Teilerfolg
+  } else {
+    urteil = 'erfolgreich';
+  }
+
+  const teile = [];
+  if (zaehlung.veroeffentlicht) teile.push(`${zaehlung.veroeffentlicht} Reel${zaehlung.veroeffentlicht > 1 ? 's' : ''} veröffentlicht`);
+  if (zaehlung.eingeplant) teile.push(`${zaehlung.eingeplant} eingeplant`);
+  if (zaehlung.teilweise_eingeplant) teile.push(`${zaehlung.teilweise_eingeplant} teilweise eingeplant`);
+  if (zaehlung.uebersprungen) teile.push(`${zaehlung.uebersprungen} übersprungen`);
+  if (zaehlung.fehlgeschlagen) teile.push(`${zaehlung.fehlgeschlagen} fehlgeschlagen`);
+  const zusammenfassung = teile.length ? teile.join(' · ') : 'Keine Reel-Varianten für diesen Run erfasst';
+
+  return { urteil, zusammenfassung, zaehlung };
+}
+
+const ABSCHLUSS_URTEIL_META = {
+  erfolgreich:   { label: 'Erfolgreich',   fg: T.ok,   bg: T.okSoft,   Icon: ICircleCheck },
+  eingeschraenkt:{ label: 'Eingeschränkt', fg: T.warn, bg: T.warnSoft, Icon: IAlert },
+  fehlgeschlagen:{ label: 'Fehlgeschlagen',fg: T.err,  bg: T.errSoft,  Icon: IAlert },
+  nicht_erfasst: { label: 'Nicht erfasst', fg: T.mutedSoft, bg: T.surfaceAlt, Icon: IClock },
+};
+
+// Wichtigste manuelle Aktion: der erste Fehler mit Grund gewinnt — mehrere gleichzeitig
+// anzuzeigen widerspräche "die wichtigste Aktion" aus dem Brief. null → "Kein manueller
+// Schritt erforderlich".
+function wichtigsteAktion(varianten, karussell) {
+  for (const v of varianten) {
+    for (const z of v.zeilen) {
+      if (z.status === 'fehlgeschlagen') {
+        const plattform = ABSCHLUSS_PLATTFORM_META[z.plattform]?.label || z.plattform;
+        return `${plattform} für „${v.stil}" prüfen${z.grund ? ': ' + z.grund : ''}`;
+      }
+    }
+  }
+  if (karussell?.status === 'fehlgeschlagen') {
+    return `Facebook-Karussell prüfen${karussell.grund ? ': ' + karussell.grund : ''}`;
+  }
+  return null;
+}
+
+function PlattformZeile({ zeile, mobile }) {
+  const meta = ABSCHLUSS_PLATTFORM_META[zeile.plattform] || { label: zeile.plattform, color: T.mutedSoft };
+  const statusMeta = abschlussStatusMeta(zeile.status);
+  const zeitText = fmtZeitpunktDE(zeile.zeitpunkt, zeile.status === 'eingeplant');
+  const zeigeLinkPlatzhalter = !zeile.link && zeile.status === 'eingeplant';
+  return (
+    <div style={{
+      display: 'flex', alignItems: mobile ? 'flex-start' : 'center', gap: mobile ? 6 : 10,
+      flexDirection: mobile ? 'column' : 'row', flexWrap: mobile ? 'nowrap' : 'wrap',
+      padding: mobile ? '10px 12px' : '8px 2px',
+      border: mobile ? `1px solid ${T.border}` : 'none',
+      borderBottom: !mobile ? `1px solid ${T.border}` : undefined,
+      borderRadius: mobile ? 8 : 0,
+      background: mobile ? T.surfaceAlt : 'transparent',
+    }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: 6, minWidth: mobile ? undefined : 118, flexShrink: 0 }}>
+        <span style={{ width: 8, height: 8, borderRadius: 2, background: meta.color, flexShrink: 0 }} />
+        <span style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: T.ink }}>{meta.label}</span>
+        {zeile.slot ? <span style={{ fontFamily: T.mono, fontSize: 10, color: T.muted }}>Slot {zeile.slot}</span> : null}
+      </div>
+      <Pill state={statusMeta.state} label={statusMeta.label} />
+      {zeitText && <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, whiteSpace: 'nowrap' }}>{zeitText}</span>}
+      {zeile.grund && <span style={{ fontFamily: T.sans, fontSize: 11.5, color: T.muted, flex: mobile ? undefined : 1 }}>{zeile.grund}</span>}
+      {zeile.link ? (
+        <a href={zeile.link} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+          style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
+          {zeile.status === 'veroeffentlicht' ? 'Reel öffnen ↗' : 'Vorschau ↗'}
+        </a>
+      ) : zeigeLinkPlatzhalter ? (
+        // Detailregel 2: vor Veröffentlichung ohne öffentlichen Link steht das explizit da,
+        // statt einfach nichts anzuzeigen.
+        <span style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 11, color: T.mutedSoft, fontStyle: 'italic', whiteSpace: 'nowrap' }}>Link erst nach Veröffentlichung</span>
+      ) : null}
+    </div>
+  );
+}
+
+function VariantenKarte({ v, mobile }) {
+  const auffaellig = v.gesamtStatus === 'fehlgeschlagen' || v.gesamtStatus === 'uebersprungen' || v.gesamtStatus === 'teilweise_eingeplant';
+  const [offen, setOffen] = React.useState(auffaellig);
+  // publish_queue_oeffentlich (Instagram-Staffel-Slots) lädt erst nach dem ersten
+  // Render nach — ohne diesen Sync bliebe eine Karte kollabiert, die erst durch die
+  // nachgeladenen Slots "auffällig" wird. Ein manueller Klick gewinnt danach immer.
+  const nutzerHatGeklickt = React.useRef(false);
+  React.useEffect(() => {
+    if (!nutzerHatGeklickt.current) setOffen(auffaellig);
+  }, [auffaellig]);
+  const gesamtMeta = abschlussStatusMeta(v.gesamtStatus);
+  return (
+    <div style={{ border: `1px solid ${T.border}`, borderRadius: 10, overflow: 'hidden' }}>
+      <button onClick={() => { nutzerHatGeklickt.current = true; setOffen(o => !o); }} style={{
+        width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 10,
+        padding: '12px 14px', background: offen ? T.surfaceAlt : T.surface, border: 'none', cursor: 'pointer', textAlign: 'left',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, minWidth: 0, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.ink }}>{v.stil}</span>
+          <Pill state={gesamtMeta.state} label={gesamtMeta.label} />
+        </div>
+        <span style={{ fontFamily: T.mono, fontSize: 15, color: T.muted, flexShrink: 0 }}>{offen ? '−' : '+'}</span>
+      </button>
+      {offen && (
+        <div style={{ padding: mobile ? '10px 12px 14px' : '4px 16px 14px', display: 'flex', flexDirection: 'column', gap: mobile ? 8 : 0 }}>
+          {v.zeilen.map((z, i) => <PlattformZeile key={z.plattform + '|' + (z.slot ?? '') + '|' + i} zeile={z} mobile={mobile} />)}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function TabAbschluss({ data, selectedEtappe }) {
+  const mobile = useMobile();
+  const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
+  const [queueRows, setQueueRows] = React.useState([]);
+
+  React.useEffect(() => {
+    if (!curE?.id) { setQueueRows([]); return; }
+    let aktiv = true;
+    fetchPublishQueue(curE.id).then(rows => { if (aktiv) setQueueRows(rows); }).catch(() => { if (aktiv) setQueueRows([]); });
+    return () => { aktiv = false; };
+  }, [curE?.id]);
+
+  if (!curE) return <Panel><div style={{ color: T.muted, fontSize: 13 }}>Keine Etappe gewählt.</div></Panel>;
+
+  const varianten = React.useMemo(() => baueVariantenResultat(curE.reelVarianten, queueRows), [curE.reelVarianten, queueRows]);
+  const abschluss = React.useMemo(() => ableiteAbschlussUrteil(varianten), [varianten]);
+  const aktion = React.useMemo(() => wichtigsteAktion(varianten, curE.karussell), [varianten, curE.karussell]);
+  const urteilMeta = ABSCHLUSS_URTEIL_META[abschluss.urteil] || ABSCHLUSS_URTEIL_META.nicht_erfasst;
+
+  const karussellMeta = abschlussStatusMeta(curE.karussell?.status);
+  const blogMeta = abschlussStatusMeta(curE.blogUrl ? 'veroeffentlicht' : curE.blogStatus);
+  const renderMeta = abschlussStatusMeta(curE.renderdateiStatus);
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
+      {/* C2: großes produktbezogenes Urteil + Kurzzählung + wichtigster Handgriff */}
+      <Panel style={{ background: urteilMeta.bg, borderColor: urteilMeta.fg + '33', padding: mobile ? 18 : 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap', marginBottom: 10 }}>
+          <urteilMeta.Icon size={mobile ? 26 : 32} sw={2} style={{ color: urteilMeta.fg, flexShrink: 0 }} />
+          <div style={{ fontFamily: T.serif, fontSize: mobile ? 26 : 38, fontWeight: 400, color: urteilMeta.fg, lineHeight: 1 }}>
+            {urteilMeta.label}
+          </div>
+        </div>
+        <div style={{ fontFamily: T.sans, fontSize: 13.5, color: T.ink }}>{abschluss.zusammenfassung}</div>
+        {aktion ? (
+          <div style={{ marginTop: 12, background: T.surface, border: `1px solid ${T.warn}`, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, fontFamily: T.sans, color: T.warn, fontWeight: 600 }}>
+            ➜ {aktion}
+          </div>
+        ) : (
+          <div style={{ marginTop: 12, background: T.surface, border: `1px solid ${T.ok}`, borderRadius: 8, padding: '10px 14px', fontSize: 12.5, fontFamily: T.sans, color: T.ok, fontWeight: 600 }}>
+            ✓ Kein manueller Schritt erforderlich
+          </div>
+        )}
+      </Panel>
+
+      {/* C3: Social-Resultat nach Variante und Slot */}
+      <Panel>
+        <PanelHeader icon={ISend} label="Social-Resultat" serif="Nach Variante & Slot" />
+        {varianten.length === 0 ? (
+          <div style={{ color: T.muted, fontSize: 13 }}>Keine Reel-Varianten für diesen Run erfasst.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {varianten.map(v => <VariantenKarte key={v.stil} v={v} mobile={mobile} />)}
+          </div>
+        )}
+      </Panel>
+
+      {/* Erzeugte Varianten: kompakt, Stil/Dauer/Ablage/Vorschau */}
+      <Panel>
+        <PanelHeader icon={IImage} label="Erzeugte Varianten" serif="Stil, Dauer, Ablage" />
+        {varianten.length === 0 ? (
+          <div style={{ color: T.muted, fontSize: 13 }}>Keine Varianten erfasst.</div>
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+            {varianten.map(v => {
+              const abgelegt = !!(v.reel_datei && v.ftp_url);
+              return (
+                <div key={v.stil} style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '8px 2px', borderBottom: `1px solid ${T.border}` }}>
+                  <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink, minWidth: 140 }}>{v.stil}</span>
+                  <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{v.duration_sec != null ? fmtDur(v.duration_sec) : '–'}</span>
+                  <Pill state={abgelegt ? 'ok' : 'warn'} label={abgelegt ? 'Abgelegt' : 'Fehlt'} />
+                  {v.ftp_url ? (
+                    <a href={v.ftp_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+                      style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                      Vorschau öffnen ↗
+                    </a>
+                  ) : (
+                    <span style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 11, color: T.mutedSoft, fontStyle: 'italic' }}>Keine Vorschau verfügbar</span>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </Panel>
+
+      {/* Weitere Ergebnisse: Karussell, Blog, Renderdatei */}
+      <Panel>
+        <PanelHeader icon={IDash} label="Weitere Ergebnisse" serif="Karussell, Blog, Renderdatei" />
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '6px 2px' }}>
+            <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink, minWidth: 150 }}>Facebook-Karussell</span>
+            <Pill state={karussellMeta.state} label={karussellMeta.label} />
+            {fmtZeitpunktDE(curE.karussell?.scheduledAt) && (
+              <span style={{ fontFamily: T.mono, fontSize: 11, color: T.muted }}>{fmtZeitpunktDE(curE.karussell?.scheduledAt)}</span>
+            )}
+            {curE.karussell?.grund && <span style={{ fontFamily: T.sans, fontSize: 11.5, color: T.muted }}>{curE.karussell.grund}</span>}
+            {curE.karussell?.url ? (
+              <a href={curE.karussell.url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+                style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                Beitrag öffnen ↗
+              </a>
+            ) : null}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '6px 2px' }}>
+            <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink, minWidth: 150 }}>Blog</span>
+            <Pill state={blogMeta.state} label={blogMeta.label} />
+            {curE.blogUrl ? (
+              <a href={curE.blogUrl} target="_blank" rel="noopener noreferrer"
+                style={{ marginLeft: mobile ? 0 : 'auto', fontSize: 12, color: T.accent, textDecoration: 'none', fontWeight: 600, whiteSpace: 'nowrap' }}>
+                Blog-Beitrag öffnen ↗
+              </a>
+            ) : null}
+          </div>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap', padding: '6px 2px' }}>
+            <span style={{ fontFamily: T.sans, fontSize: 12.5, fontWeight: 600, color: T.ink, minWidth: 150 }}>Renderdatei / Dropbox</span>
+            <Pill state={renderMeta.state} label={renderMeta.label} />
+          </div>
+        </div>
+      </Panel>
+
+      {/* Auffälligkeiten & offene Schritte in normaler Sprache */}
+      <Panel>
+        <PanelHeader icon={IAlert} label="Auffälligkeiten & offene Schritte" />
+        {(() => {
+          const auffaelligkeiten = [];
+          varianten.forEach(v => v.zeilen.forEach(z => {
+            if (z.status === 'fehlgeschlagen' || z.status === 'uebersprungen') {
+              const plattform = ABSCHLUSS_PLATTFORM_META[z.plattform]?.label || z.plattform;
+              const slotText = z.slot ? ` (Slot ${z.slot})` : '';
+              auffaelligkeiten.push(
+                `${v.stil}${slotText} · ${plattform}: ${z.status === 'fehlgeschlagen' ? 'fehlgeschlagen' : 'übersprungen'}${z.grund ? ' — ' + z.grund : ''}`
+              );
+            }
+          }));
+          if (curE.karussell?.status === 'fehlgeschlagen' || curE.karussell?.status === 'uebersprungen') {
+            auffaelligkeiten.push(`Facebook-Karussell: ${curE.karussell.status === 'fehlgeschlagen' ? 'fehlgeschlagen' : 'übersprungen'}${curE.karussell.grund ? ' — ' + curE.karussell.grund : ''}`);
+          }
+          return auffaelligkeiten.length === 0 ? (
+            <div style={{ fontSize: 13, color: T.ok, fontFamily: T.sans, fontWeight: 500 }}>Kein manueller Schritt erforderlich.</div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {auffaelligkeiten.map((text, i) => (
+                <div key={i} style={{ fontSize: 13, color: T.ink, fontFamily: T.sans, lineHeight: 1.5 }}>• {text}</div>
+              ))}
+            </div>
+          );
+        })()}
+      </Panel>
+    </div>
+  );
+}
+
 // ─── Tab: Reels (Reichweite der Varianten der gewählten Etappe) ───────────────
 // E2a: TabReels() nahm bis zum Umbau keine Props entgegen und ignorierte damit
 // selectedEtappe komplett — der Tab zeigte immer den globalen Schnitt über alle
@@ -4141,6 +4587,7 @@ function ProviderRow({ p, max, fmtEur, track }) {
 }
 
 const ARCHIV_TABS = [
+  { id: 'abschluss',   label: 'Abschluss',   Icon: ICircleCheck, Content: TabAbschluss },
   { id: 'uebersicht',  label: 'Übersicht',   Icon: IDash,      Content: TabUebersicht },
   { id: 'kosten',      label: 'Kosten',      Icon: ICoins,     Content: TabKosten },
   { id: 'stylereview', label: 'Style',        Icon: ISparkles,  Content: TabStyleReview },
