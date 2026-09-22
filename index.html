@@ -37,7 +37,6 @@
   .sk-rate-btn.on-top    { background:#FEF3C7; border-color:#d97706; transform:translateY(-2px); box-shadow:0 4px 12px rgba(217,119,6,0.22); }
   .sk-rate-btn.on-gut    { background:#DCFCE7; border-color:#15803d; transform:translateY(-2px); box-shadow:0 4px 12px rgba(21,128,61,0.22); }
   .sk-rate-btn.on-mittel { background:#eef1f5; border-color:#64748b; transform:translateY(-2px); box-shadow:0 4px 12px rgba(100,116,139,0.18); }
-  .sk-rate-btn.on-raus   { background:#FEE2E2; border-color:#B91C1C; transform:translateY(-2px); box-shadow:0 4px 12px rgba(185,28,28,0.18); }
   .sk-switch { display:inline-flex; align-items:center; gap:7px; cursor:pointer; font-family:'Geist',ui-sans-serif,sans-serif; font-size:0.74rem; font-weight:500; color:#6E6780; background:none; border:none; padding:0; user-select:none; white-space:nowrap; }
   .sk-switch .trk { width:30px; height:17px; border-radius:9px; background:#D9D3E3; position:relative; flex-shrink:0; transition:background 0.15s; }
   .sk-switch .trk::after { content:''; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,0.2); transition:transform 0.15s; }
@@ -2628,112 +2627,86 @@ function Lightbox({ fotos, startIdx, onClose }) {
 }
 
 // ─── Style Review Tab (inline) ─────────────────────────────────────────────────────────
-// value = was in etappen.stil_bewertung gespeichert wird (aligned mit stile.bewertung)
-// 0=Raus, 1=Mittel, 2=Gut, 4=Top
-const STYLE_RATINGS = [
-  { value: 0, emoji: '❌', label: 'Raus',   cls: 'on-raus',   stilUpdate: { aktiv: false, bewertung: null } },
-  { value: 1, emoji: '🟡', label: 'Mittel', cls: 'on-mittel', stilUpdate: { aktiv: true,  bewertung: 1    } },
-  { value: 2, emoji: '👍', label: 'Gut',    cls: 'on-gut',    stilUpdate: { aktiv: true,  bewertung: 2    } },
-  { value: 4, emoji: '🔥', label: 'Top',    cls: 'on-top',    stilUpdate: { aktiv: true,  bewertung: 4    } },
-];
+// Nur Ansicht: welcher Stil an dieser Etappe lief und wie die Bilder aussahen.
+// Bewerten, An/Aus und Testmodus gibt es ausschließlich im Stil-Katalog — der Link
+// springt dorthin. Die alten Tageswerte etappen.stil_bewertung/stil_notiz bleiben in
+// der DB, werden aber nicht mehr geschrieben.
+const SR_BEWERTUNG = { 4: '🔥 Top', 2: '👍 Gut', 1: '🟡 Mittel' };
 
-function TabStyleReview({ data, selectedEtappe }) {
+function SrBadge({ bg, fg, children }) {
+  return (
+    <div style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600, background: bg, color: fg,
+      borderRadius: 20, padding: '4px 12px', whiteSpace: 'nowrap' }}>{children}</div>
+  );
+}
+
+function TabStyleReview({ data, selectedEtappe, onOpenStil }) {
   const mobile = useMobile();
   const curE = selectedEtappe || data.etappenList.find(e => e.id === data.latestId);
 
   const [fotos, setFotos]       = React.useState([]);
   const [loading, setLoading]   = React.useState(false);
-  const [rating, setRating]     = React.useState(null);
-  const [saving, setSaving]     = React.useState(false);
-  const [saveMsg, setSaveMsg]   = React.useState(null);
   const [lightbox, setLightbox] = React.useState(null);
   const [stilInfo, setStilInfo] = React.useState(null);
 
   React.useEffect(() => {
     if (!curE?.id) return;
-    setLoading(true); setFotos([]); setRating(null); setSaveMsg(null); setStilInfo(null);
+    setLoading(true); setFotos([]); setStilInfo(null);
     const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
-    Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}&select=id,stil_bewertung&limit=1`, { headers: h }).then(r => r.json()).then(rows => rows[0] || null),
-      fetch(`${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${curE.id}&bildgen_url=not.is.null&select=foto_nr,bildgen_url,tagesstil&order=foto_nr.asc`, { headers: h }).then(r => r.json()),
-    ]).then(([det, f]) => {
-      setFotos(f);
-      if (det?.stil_bewertung != null) setRating(det.stil_bewertung);
-      const tagesstil = f.length > 0 ? f[0].tagesstil : null;
-      if (tagesstil) {
-        fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}&select=name,bewertung,aktiv,mal_benutzt&limit=1`, { headers: h })
-          .then(r => r.json()).then(rows => setStilInfo(rows[0] || null));
-      }
-    }).finally(() => setLoading(false));
+    fetch(`${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${curE.id}&bildgen_url=not.is.null&select=foto_nr,bildgen_url,tagesstil&order=foto_nr.asc`, { headers: h })
+      .then(r => r.json())
+      .then(f => {
+        setFotos(f);
+        const tagesstil = f.length > 0 ? f[0].tagesstil : null;
+        if (tagesstil) {
+          fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}&select=name,bewertung,aktiv,forciert,mal_benutzt&limit=1`, { headers: h })
+            .then(r => r.json()).then(rows => setStilInfo(rows[0] || null));
+        }
+      }).finally(() => setLoading(false));
   }, [curE?.id]);
-
-  async function handleRate(r) {
-    if (!curE || saving) return;
-    // Optimistisch setzen, bei Fehler unten wieder zurückrollen — sonst zeigt der Button eine
-    // Bewertung an, die nie in der DB gelandet ist (genau der Fall, der bis 27.07. still lief).
-    const vorher = rating;
-    setRating(r.value); setSaving(true); setSaveMsg(null);
-    const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', Prefer: 'return=minimal' };
-    try {
-      const res = await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${curE.id}`, {
-        method: 'PATCH', headers: h,
-        body: JSON.stringify({ stil_bewertung: r.value, stil_notiz: null }),
-      });
-      if (!res.ok) throw new Error(`HTTP ${res.status} beim Speichern der Bewertung`);
-      const tagesstil = fotos.length > 0 ? fotos[0].tagesstil : null;
-      if (tagesstil) {
-        const resStil = await fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}`, {
-          method: 'PATCH', headers: h, body: JSON.stringify(r.stilUpdate),
-        });
-        if (!resStil.ok) throw new Error(`HTTP ${resStil.status} beim Speichern des Stils`);
-        setStilInfo(prev => prev ? { ...prev, ...r.stilUpdate } : prev);
-      }
-      setSaveMsg({ text: `✓ ${r.emoji} ${r.label}`, type: 'ok' });
-      setTimeout(() => setSaveMsg(null), 3000);
-    } catch (err) {
-      setRating(vorher);
-      setSaveMsg({ text: `Fehler: ${err.message}`, type: 'error' });
-    } finally { setSaving(false); }
-  }
 
   if (!curE) return null;
   const stilName = fotos.length > 0 ? (fotos[0].tagesstil || '–') : '–';
+  const aus = stilInfo?.aktiv === false;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 14 }}>
 
       {/* Stil-Header */}
       <Panel>
-        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14, flexWrap: mobile ? 'wrap' : 'nowrap' }}>
           <div style={{ width: 4, height: 44, background: T.accent, borderRadius: 2, flexShrink: 0 }} />
-          <div style={{ flex: 1 }}>
+          <div style={{ flex: 1, minWidth: 0 }}>
             <div style={{ fontFamily: T.mono, fontSize: 10, color: T.muted, fontWeight: 500,
               textTransform: 'uppercase', letterSpacing: 0.5, marginBottom: 2 }}>Stil</div>
             <div style={{ fontFamily: T.serif, fontSize: mobile ? 24 : 32, color: T.ink, lineHeight: 1 }}>
               {loading ? '…' : stilName}
             </div>
           </div>
-          {/* Bewertet-Badge */}
-          {!loading && (() => {
-            if (stilInfo?.aktiv === false) return (
-              <div style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600,
-                background: '#fee2e2', color: '#dc2626', borderRadius: 20,
-                padding: '4px 12px', whiteSpace: 'nowrap' }}>❌ Deaktiviert</div>
-            );
-            if (stilInfo?.bewertung != null) return (
-              <div style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600,
-                background: '#dcfce7', color: '#16a34a', borderRadius: 20,
-                padding: '4px 12px', whiteSpace: 'nowrap' }}>✓ Bewertet</div>
-            );
-            return (
-              <div style={{ fontFamily: T.mono, fontSize: 11, fontWeight: 600,
-                background: '#fff7ed', color: '#ea580c', borderRadius: 20,
-                padding: '4px 12px', whiteSpace: 'nowrap' }}>Nicht bewertet</div>
-            );
-          })()}
+          {/* Stand aus dem Stil-Katalog — nur Anzeige */}
+          {!loading && stilInfo && (
+            <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+              {aus
+                ? <SrBadge bg="#fee2e2" fg="#dc2626">Aus</SrBadge>
+                : <SrBadge bg="#dcfce7" fg="#16a34a">An</SrBadge>}
+              {stilInfo.forciert && !aus && <SrBadge bg={T.warnSoft} fg="#B45309">🧪 Im Test</SrBadge>}
+              {SR_BEWERTUNG[stilInfo.bewertung]
+                ? <SrBadge bg={T.surfaceAlt} fg={T.ink}>{SR_BEWERTUNG[stilInfo.bewertung]}</SrBadge>
+                : <SrBadge bg="#fff7ed" fg="#ea580c">Nicht bewertet</SrBadge>}
+            </div>
+          )}
         </div>
-        <div style={{ marginLeft: 18, marginTop: 10, fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>
-          {stilInfo != null ? `${stilInfo.mal_benutzt ?? 0}× benutzt` : (loading ? '' : '–')}
+        <div style={{ marginLeft: 18, marginTop: 10, display: 'flex', alignItems: 'center', gap: 14, flexWrap: 'wrap' }}>
+          <span style={{ fontFamily: T.mono, fontSize: 11, color: T.mutedSoft }}>
+            {stilInfo != null ? `${stilInfo.mal_benutzt ?? 0}× benutzt` : (loading ? '' : '–')}
+          </span>
+          {stilInfo && onOpenStil && (
+            <button onClick={() => onOpenStil(stilInfo.name)}
+              style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, color: T.accent, background: 'none',
+                border: 'none', padding: 0, cursor: 'pointer' }}>
+              Im Stil-Katalog öffnen →
+            </button>
+          )}
         </div>
       </Panel>
 
@@ -2766,30 +2739,6 @@ function TabStyleReview({ data, selectedEtappe }) {
           <div style={{ fontSize: 13, color: T.mutedSoft }}>für diese Etappe verfügbar</div>
         </Panel>
       ) : null}
-
-      {/* Bewertung */}
-      <Panel>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 14 }}>
-          <PanelHeader icon={ISparkles} label="Bewertung" serif="Wie war der Stil?" />
-          {saveMsg && (
-            <div style={{ padding: '6px 12px', borderRadius: 8, fontFamily: T.sans, fontSize: 12, fontWeight: 500,
-              background: saveMsg.type === 'ok' ? T.okSoft : T.errSoft,
-              color: saveMsg.type === 'ok' ? T.ok : T.err }}>
-              {saveMsg.text}
-            </div>
-          )}
-        </div>
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 8, maxWidth: 360, opacity: saving ? 0.6 : 1, transition: 'opacity 0.15s' }}>
-          {STYLE_RATINGS.map(r => (
-            <button key={r.value} onClick={() => handleRate(r)}
-              className={`sk-rate-btn${rating === r.value ? ' ' + r.cls : ''}`}
-              style={{ padding: '12px 8px' }}>
-              <span style={{ fontSize: '1.6rem', lineHeight: 1 }}>{r.emoji}</span>
-              <span style={{ fontFamily: T.sans, fontSize: '0.7rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.04em', color: T.muted }}>{r.label}</span>
-            </button>
-          ))}
-        </div>
-      </Panel>
 
       {lightbox !== null && (
         <Lightbox fotos={fotos} startIdx={lightbox}
@@ -2826,7 +2775,7 @@ function skPickSpread(arr, n) {
   }
   return out;
 }
-function TabStilKatalog() {
+function TabStilKatalog({ fokus, onFokusDone } = {}) {
   const mobile = useMobile();
   const [stile, setStile]           = React.useState(_skCache ? _skCache.stile : []);
   const [images, setImages]         = React.useState(_skCache ? _skCache.images : {});
@@ -2841,7 +2790,28 @@ function TabStilKatalog() {
   const [expandedDescs, setExpandedDescs] = React.useState({});
   const [filtersOpen, setFiltersOpen] = React.useState(false);
   const [nurAktive, setNurAktive]   = React.useState(true);
+  const [hl, setHl]                 = React.useState(null);   // hervorgehobene Stil-ID
   const toastTimer = React.useRef(null);
+
+  // Sprung aus dem Etappen-Tab „Style": Filter so stellen, dass der Stil sichtbar
+  // ist, dann hinscrollen und die Zeile kurz hervorheben.
+  React.useEffect(() => {
+    if (!fokus || loading) return;
+    const s = stile.find(x => x.name === fokus);
+    if (onFokusDone) onFokusDone();
+    if (!s) return;
+    setActiveCat('alle'); setActiveStatus('alle');
+    if (s.aktiv === false) setNurAktive(false);
+    setHl(s.id);
+  }, [fokus, loading, stile]);
+
+  React.useEffect(() => {
+    if (hl == null) return;
+    const el = document.getElementById(`sk-${hl}`);
+    if (el) el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    const t = setTimeout(() => setHl(null), 2500);
+    return () => clearTimeout(t);
+  }, [hl]);
 
   React.useEffect(() => {
     if (_skCache) return;
@@ -3060,7 +3030,9 @@ function TabStilKatalog() {
             : 'nie genutzt';
           const aus = s.aktiv === false;
           return (
-            <div key={s.id} className="sk-row" style={mobile ? { flexDirection: 'column', gap: 12, padding: 12 } : undefined}>
+            <div key={s.id} id={`sk-${s.id}`} className="sk-row"
+              style={{ ...(mobile ? { flexDirection: 'column', gap: 12, padding: 12 } : {}),
+                ...(hl === s.id ? { boxShadow: `0 0 0 3px ${T.accent}` } : {}) }}>
               {/* Info */}
               <div style={{ width: mobile ? '100%' : 250, flexShrink: 0, opacity: aus ? 0.5 : 1 }}>
                 <div className="sk-name" onClick={() => setGallery({ styleId: s.id })} title="Alle Bilder ansehen">{s.name}</div>
@@ -4807,6 +4779,8 @@ function App() {
   const [tab, setTab]         = useState('uebersicht');
   const direkteAnsicht = new URLSearchParams(window.location.search).get('ansicht');
   const [mode, setMode] = useState(direkteAnsicht === 'hitl2' ? 'pipeline' : 'archiv');      // 'archiv' | 'pipeline' | 'stil-katalog'
+  const [stilFokus, setStilFokus] = useState(null);   // Stilname, zu dem der Katalog springen soll
+  const oeffneStil = name => { setStilFokus(name); setMode('stil-katalog'); };
   const [pipelineTab, setPipelineTab] = useState(direkteAnsicht === 'hitl2' ? 'hitl2' : 'monolog');
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(true);
@@ -5237,13 +5211,13 @@ function App() {
 
       {/* Content */}
       {mode === 'stil-katalog'
-        ? <TabStilKatalog />
+        ? <TabStilKatalog fokus={stilFokus} onFokusDone={() => setStilFokus(null)} />
         : mode === 'kosten-gesamt'
         ? <TabKostenGesamt />
         : <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
             {activeTab === 'liverun'
               ? <TabProgress steps={steps} onRefresh={() => runEtappeId && loadSteps(runEtappeId)} latestEtappe={data?.etappenList?.find(e => e.id === data.latestId) || data?.etappenList?.[data.etappenList.length - 1]} />
-              : activeContent?.Content ? <activeContent.Content data={viewData} selectedEtappe={curEtappe} abschluss={runAbschluss} /> : null
+              : activeContent?.Content ? <activeContent.Content data={viewData} selectedEtappe={curEtappe} abschluss={runAbschluss} onOpenStil={oeffneStil} /> : null
             }
           </div>
       }
