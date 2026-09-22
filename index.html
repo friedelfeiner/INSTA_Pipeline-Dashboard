@@ -38,6 +38,13 @@
   .sk-rate-btn.on-gut    { background:#DCFCE7; border-color:#15803d; transform:translateY(-2px); box-shadow:0 4px 12px rgba(21,128,61,0.22); }
   .sk-rate-btn.on-mittel { background:#eef1f5; border-color:#64748b; transform:translateY(-2px); box-shadow:0 4px 12px rgba(100,116,139,0.18); }
   .sk-rate-btn.on-raus   { background:#FEE2E2; border-color:#B91C1C; transform:translateY(-2px); box-shadow:0 4px 12px rgba(185,28,28,0.18); }
+  .sk-switch { display:inline-flex; align-items:center; gap:7px; cursor:pointer; font-family:'Geist',ui-sans-serif,sans-serif; font-size:0.74rem; font-weight:500; color:#6E6780; background:none; border:none; padding:0; user-select:none; white-space:nowrap; }
+  .sk-switch .trk { width:30px; height:17px; border-radius:9px; background:#D9D3E3; position:relative; flex-shrink:0; transition:background 0.15s; }
+  .sk-switch .trk::after { content:''; position:absolute; top:2px; left:2px; width:13px; height:13px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,0.2); transition:transform 0.15s; }
+  .sk-switch.on { color:#15803d; font-weight:600; }
+  .sk-switch.on .trk { background:#15803d; }
+  .sk-switch.on .trk::after { transform:translateX(13px); }
+  .sk-force-btn.on { background:#FEF3C7; border-color:#d97706; color:#B45309; font-weight:700; }
   .sk-mini-btn { font-family:'Geist',ui-sans-serif,sans-serif; font-size:0.74rem; padding:6px 8px; border-radius:7px; cursor:pointer; border:1px solid #ECE6F4; background:#fff; color:#6E6780; flex:1; text-align:center; transition:all 0.12s; }
   .sk-mini-btn:hover { border-color:#7C3AED; color:#7C3AED; }
   .sk-fav-btn.on { background:#fdeef5; border-color:#db2777; color:#db2777; font-weight:700; }
@@ -2793,18 +2800,18 @@ function TabStyleReview({ data, selectedEtappe }) {
 }
 
 // ─── Stil-Katalog ─────────────────────────────────────────────────────────────
+// Bewertung und An/Aus sind getrennt: die Bewertung schreibt nur bewertung,
+// ob die Pipeline den Stil zieht, entscheidet allein der Schalter (aktiv).
 const SK_RATINGS = {
-  top:    { emoji: '🔥', label: 'Top',    db: { bewertung: 4, aktiv: true },    weight: '4×', cls: 'on-top' },
-  gut:    { emoji: '👍', label: 'Gut',    db: { bewertung: 2, aktiv: true },    weight: '2×', cls: 'on-gut' },
-  mittel: { emoji: '🟡', label: 'Mittel', db: { bewertung: 1, aktiv: true },    weight: '1×', cls: 'on-mittel' },
-  raus:   { emoji: '❌', label: 'Raus',   db: { bewertung: null, aktiv: false }, weight: '0×', cls: 'on-raus' },
+  top:    { emoji: '🔥', label: 'Top',    db: { bewertung: 4 }, weight: '4×', cls: 'on-top' },
+  gut:    { emoji: '👍', label: 'Gut',    db: { bewertung: 2 }, weight: '2×', cls: 'on-gut' },
+  mittel: { emoji: '🟡', label: 'Mittel', db: { bewertung: 1 }, weight: '1×', cls: 'on-mittel' },
 };
-const SK_ORDER = ['top', 'gut', 'mittel', 'raus'];
-const SK_RANK  = { top: 0, gut: 1, mittel: 2, unbewertet: 3, raus: 4 };
+const SK_ORDER = ['top', 'gut', 'mittel'];
+const SK_RANK  = { top: 0, gut: 1, mittel: 2, unbewertet: 3 };
 let _skCache = null;
 
 function skStateOf(s) {
-  if (s.aktiv === false) return 'raus';
   if (s.bewertung === 4) return 'top';
   if (s.bewertung === 2) return 'gut';
   if (s.bewertung === 1) return 'mittel';
@@ -2833,6 +2840,7 @@ function TabStilKatalog() {
   const [gallery, setGallery]       = React.useState(null);   // { styleId }
   const [expandedDescs, setExpandedDescs] = React.useState({});
   const [filtersOpen, setFiltersOpen] = React.useState(false);
+  const [nurAktive, setNurAktive]   = React.useState(true);
   const toastTimer = React.useRef(null);
 
   React.useEffect(() => {
@@ -2872,7 +2880,7 @@ function TabStilKatalog() {
   const skRate = React.useCallback(async (id, key) => {
     const s = stile.find(x => x.id === id);
     if (!s) return;
-    const body = key === 'reset' ? { bewertung: null, aktiv: true } : SK_RATINGS[key].db;
+    const body = key === 'reset' ? { bewertung: null } : SK_RATINGS[key].db;
     try {
       await skPatch(id, body);
       const updated = stile.map(x => x.id === id ? { ...x, ...body } : x);
@@ -2895,6 +2903,34 @@ function TabStilKatalog() {
     } catch (e) { showToast(`❌ Fehler: ${e.message}`, T.errSoft); }
   }, [stile, skPatch, showToast]);
 
+  // Ein ausgeschalteter forcierter Stil zählt in der Pipeline nicht mehr als
+  // forciert (imagegen.pick_daily_style filtert aktiv=true) — deshalb nimmt
+  // Ausschalten forciert mit, und Forcieren schaltet den Stil ein.
+  const skSetFlags = React.useCallback(async (ids, body, msg) => {
+    try {
+      for (const id of ids) await skPatch(id, body);
+      setStile(prev => prev.map(x => ids.includes(x.id) ? { ...x, ...body } : x));
+      _skCache = null;
+      showToast(msg, body.forciert ? T.warnSoft : T.okSoft);
+    } catch (e) { showToast(`❌ Fehler: ${e.message}`, T.errSoft); }
+  }, [skPatch, showToast]);
+
+  const skToggleAktiv = React.useCallback((id) => {
+    const s = stile.find(x => x.id === id);
+    if (!s) return;
+    const next = s.aktiv === false;
+    const body = next ? { aktiv: true } : { aktiv: false, forciert: false };
+    skSetFlags([id], body, `${s.name} → ${next ? 'an' : 'aus'}`);
+  }, [stile, skSetFlags]);
+
+  const skToggleForciert = React.useCallback((id) => {
+    const s = stile.find(x => x.id === id);
+    if (!s) return;
+    const next = !s.forciert;
+    const body = next ? { forciert: true, aktiv: true } : { forciert: false };
+    skSetFlags([id], body, next ? `🧪 ${s.name} → im Test` : `${s.name} → nicht mehr im Test`);
+  }, [stile, skSetFlags]);
+
   React.useEffect(() => {
     const handler = e => {
       if (lb) {
@@ -2909,21 +2945,25 @@ function TabStilKatalog() {
     return () => window.removeEventListener('keydown', handler);
   }, [lb, gallery]);
 
+  const imPool = React.useMemo(() => nurAktive ? stile.filter(s => s.aktiv !== false) : stile, [stile, nurAktive]);
+  const anzahlAn  = stile.filter(s => s.aktiv !== false).length;
+  const forcierte = stile.filter(s => s.forciert && s.aktiv !== false);
+
   const counts = React.useMemo(() => {
-    const inCat = activeCat === 'alle' ? stile : stile.filter(s => (s.kategorie || '—') === activeCat);
-    const c = { alle: inCat.length, unbewertet: 0, top: 0, gut: 0, mittel: 0, raus: 0, fav: 0 };
+    const inCat = activeCat === 'alle' ? imPool : imPool.filter(s => (s.kategorie || '—') === activeCat);
+    const c = { alle: inCat.length, unbewertet: 0, top: 0, gut: 0, mittel: 0, fav: 0 };
     inCat.forEach(s => { c[skStateOf(s)]++; if (s.favorit) c.fav++; });
     return c;
-  }, [stile, activeCat]);
+  }, [imPool, activeCat]);
 
   const catCounts = React.useMemo(() => {
     const c = {};
-    stile.forEach(s => { const k = s.kategorie || '—'; c[k] = (c[k] || 0) + 1; });
+    imPool.forEach(s => { const k = s.kategorie || '—'; c[k] = (c[k] || 0) + 1; });
     return c;
-  }, [stile]);
+  }, [imPool]);
 
   const visible = React.useMemo(() => {
-    const filtered = stile.filter(s => {
+    const filtered = imPool.filter(s => {
       if (activeCat !== 'alle' && (s.kategorie || '—') !== activeCat) return false;
       if (activeStatus === 'alle')  return true;
       if (activeStatus === 'fav')   return !!s.favorit;
@@ -2933,13 +2973,14 @@ function TabStilKatalog() {
     if (sort === 'name')   arr.sort((a, b) => a.name.localeCompare(b.name));
     else if (sort === 'used')   arr.sort((a, b) => (b.mal_benutzt || 0) - (a.mal_benutzt || 0));
     else if (sort === 'recent') arr.sort((a, b) => (b.zuletzt_benutzt || '').localeCompare(a.zuletzt_benutzt || ''));
-    else arr.sort((a, b) => SK_RANK[skStateOf(a)] - SK_RANK[skStateOf(b)] || a.name.localeCompare(b.name));
+    else arr.sort((a, b) => (a.aktiv === false) - (b.aktiv === false)
+      || SK_RANK[skStateOf(a)] - SK_RANK[skStateOf(b)] || a.name.localeCompare(b.name));
     return arr;
-  }, [stile, activeStatus, activeCat, sort]);
+  }, [imPool, activeStatus, activeCat, sort]);
 
   const STATUS_DEFS = [
     ['alle','Alle'],['unbewertet','⚪ Unbewertet'],['top','🔥 Top'],
-    ['gut','👍 Gut'],['mittel','🟡 Mittel'],['raus','❌ Raus'],['fav','⭐ Favoriten'],
+    ['gut','👍 Gut'],['mittel','🟡 Mittel'],['fav','⭐ Favoriten'],
   ];
   const cats = Object.keys(catCounts).sort();
   const galleryStyle = gallery ? stile.find(s => s.id === gallery.styleId) : null;
@@ -2958,6 +2999,10 @@ function TabStilKatalog() {
               <option value="used">Meist genutzt</option>
               <option value="recent">Zuletzt genutzt</option>
             </select>
+            <button className={`sk-switch${nurAktive ? ' on' : ''}`} onClick={() => setNurAktive(p => !p)}
+              title={nurAktive ? 'Ausgeschaltete Stile einblenden' : 'Nur eingeschaltete Stile zeigen'}>
+              <span className="trk" />Nur aktive
+            </button>
             {mobile && (
               <button onClick={() => setFiltersOpen(p => !p)}
                 style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '5px 10px', borderRadius: 7, border: `1px solid ${T.border}`, background: filtersOpen ? T.accentSoft : T.surface, color: filtersOpen ? T.accentInk : T.muted, cursor: 'pointer' }}>
@@ -2986,8 +3031,18 @@ function TabStilKatalog() {
             </>
           )}
           <span style={{ fontFamily: T.sans, fontSize: 11, color: T.muted, paddingTop: 2 }}>
-            {loading ? 'Lade …' : `${stile.length} Stile · ${counts.top + counts.gut + counts.mittel} bewertet · ${counts.unbewertet} offen · ${counts.raus} raus`}
+            {loading ? 'Lade …' : `${stile.length} Stile · ${anzahlAn} an · ${stile.length - anzahlAn} aus${nurAktive && stile.length > anzahlAn ? ' (ausgeblendet)' : ''} · ${counts.top + counts.gut + counts.mittel} bewertet · ${counts.unbewertet} offen`}
           </span>
+          {forcierte.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', flexWrap: 'wrap', gap: '6px 10px', marginTop: 4, padding: '7px 10px',
+              borderRadius: 8, background: T.warnSoft, border: '1px solid #d97706', fontFamily: T.sans, fontSize: 12, color: T.ink }}>
+              <span>🧪 <strong>Testmodus:</strong> Die Pipeline nimmt nur {forcierte.map(s => s.name).join(', ')} — die normale Auswahl ist ausgesetzt.</span>
+              <button className="sk-mini-btn" style={{ flex: 'none', marginLeft: 'auto' }}
+                onClick={() => skSetFlags(forcierte.map(s => s.id), { forciert: false }, 'Testmodus beendet — normale Auswahl läuft wieder')}>
+                Testmodus beenden
+              </button>
+            </div>
+          )}
         </div>
       </div>
 
@@ -3003,10 +3058,11 @@ function TabStilKatalog() {
           const used = s.mal_benutzt
             ? `${s.mal_benutzt}× genutzt${s.zuletzt_benutzt ? ' · ' + s.zuletzt_benutzt : ''}`
             : 'nie genutzt';
+          const aus = s.aktiv === false;
           return (
             <div key={s.id} className="sk-row" style={mobile ? { flexDirection: 'column', gap: 12, padding: 12 } : undefined}>
               {/* Info */}
-              <div style={{ width: mobile ? '100%' : 250, flexShrink: 0 }}>
+              <div style={{ width: mobile ? '100%' : 250, flexShrink: 0, opacity: aus ? 0.5 : 1 }}>
                 <div className="sk-name" onClick={() => setGallery({ styleId: s.id })} title="Alle Bilder ansehen">{s.name}</div>
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 5, marginBottom: 9 }}>
                   {s.kategorie && <span style={{ fontFamily: T.mono, fontSize: '0.68rem', padding: '2px 7px', borderRadius: 5, background: T.accentSoft, color: T.accentInk, fontWeight: 600 }}>{s.kategorie}</span>}
@@ -3023,7 +3079,7 @@ function TabStilKatalog() {
                 )}
               </div>
               {/* Images */}
-              <div style={{ display: 'flex', gap: 8, flexGrow: 1, overflowX: 'auto', background: T.surfaceAlt, borderRadius: 9, padding: 8, alignItems: 'center', minHeight: mobile ? '28vw' : 160, width: mobile ? '100%' : undefined }}>
+              <div style={{ display: 'flex', gap: 8, flexGrow: 1, overflowX: 'auto', background: T.surfaceAlt, borderRadius: 9, padding: 8, alignItems: 'center', minHeight: mobile ? '28vw' : 160, width: mobile ? '100%' : undefined, opacity: aus ? 0.5 : 1 }}>
                 {imgs.length === 0
                   ? <div style={{ color: T.mutedSoft, fontStyle: 'italic', fontSize: '0.82rem', width: '100%', textAlign: 'center', fontFamily: T.sans }}>Noch keine Bilder generiert</div>
                   : <>
@@ -3042,7 +3098,18 @@ function TabStilKatalog() {
                 }
               </div>
               {/* Rating */}
-              <div style={{ width: mobile ? '100%' : 160, flexShrink: 0, display: 'grid', gridTemplateColumns: mobile ? '1fr 1fr 1fr 1fr' : '1fr 1fr', gap: 6, alignContent: 'start' }}>
+              <div style={{ width: mobile ? '100%' : 180, flexShrink: 0, display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 6, alignContent: 'start' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 2, gridColumn: '1 / -1' }}>
+                  <button className={`sk-switch${aus ? '' : ' on'}`} onClick={() => skToggleAktiv(s.id)}
+                    title={aus ? 'Einschalten — die Pipeline kann den Stil wieder ziehen' : 'Ausschalten — die Pipeline zieht den Stil nicht mehr'}>
+                    <span className="trk" />{aus ? 'Aus' : 'An'}
+                  </button>
+                  <button className={`sk-mini-btn sk-force-btn${s.forciert && !aus ? ' on' : ''}`} style={{ marginLeft: 'auto', flex: 'none' }}
+                    onClick={() => skToggleForciert(s.id)}
+                    title="Testmodus: die Pipeline nimmt nur noch Stile im Test, bis der Testmodus beendet ist (DB-Feld forciert)">
+                    {s.forciert && !aus ? '🧪 Im Test' : forcierte.length ? '🧪 Mittesten' : '🧪 Nur diesen testen'}
+                  </button>
+                </div>
                 {SK_ORDER.map(k => {
                   const r = SK_RATINGS[k];
                   return (
