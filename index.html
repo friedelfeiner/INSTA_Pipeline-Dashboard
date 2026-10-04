@@ -3221,6 +3221,66 @@ function MonologListeItem({ e, aktiv, hideKuerzel, onPick }) {
   );
 }
 
+// Kurzfassung von INSTA_Pipeline/docs/wissen/monolog-checkliste.md — beim Diktieren vor Augen.
+// Auf/zu wird pro Gerät gemerkt (reine Bequemlichkeit, darf fehlen).
+const MONOLOG_CHECKLISTE = [
+  ['Vorher kurz überlegen', [
+    'Was war heute anders als erwartet? → wird der Hook',
+    'Worum ging’s eigentlich — in einem Satz?',
+    'Welche Szene würde ich einem Freund zuerst erzählen?',
+  ]],
+  ['Beim Sprechen', [
+    'Kern einmal aussprechen: „Worum’s heute eigentlich ging: …“',
+    'Szenen statt Ablauf — wörtliche Sätze von mir und anderen',
+    '1–2 Details, die ein Fremder nicht erraten würde',
+    'Ein ehrlicher Satz: Was hat das mit mir gemacht?',
+    'Andeutungen auserzählen oder weglassen',
+    '„Update zu …“ für Fäden von gestern',
+    'Mit einem Bild oder Ausblick aufhören, nicht mit „war müde“',
+  ]],
+  ['Nicht nötig', [
+    'Kompletter Tagesablauf, Kilometer, Höhenmeter — kommt aus Fotos & Daten',
+    'Was „nix Besonderes“ war',
+    'Im Kreis drehen ist okay — danach einmal den Punkt sagen',
+  ]],
+  ['Gegenlesen vor dem Freigeben', [
+    'Steht ein Kern-Satz drin?',
+    'Steht ein echtes Gefühl drin?',
+    'Eine Andeutung ohne Inhalt?',
+    'Soll alles davon öffentlich im Blog stehen? (Blog zeigt den Monolog fast wörtlich)',
+    'Namen, Orte, Zahlen richtig transkribiert?',
+  ]],
+];
+
+function MonologCheckliste() {
+  const [offen, setOffen] = React.useState(() => {
+    try { return localStorage.getItem('monologChecklisteOffen') === '1'; } catch { return false; }
+  });
+  function toggle(e) {
+    const jetzt = e.currentTarget.open;
+    setOffen(jetzt);
+    try { localStorage.setItem('monologChecklisteOffen', jetzt ? '1' : '0'); } catch {}
+  }
+  return (
+    <details open={offen} onToggle={toggle}
+      style={{ marginBottom: 16, border: `1px solid ${T.border}`, borderRadius: 8, background: T.surfaceAlt, padding: '8px 12px', fontFamily: T.sans }}>
+      <summary style={{ cursor: 'pointer', fontSize: 13, fontWeight: 600, color: T.accentInk }}>
+        📝 Checkliste fürs Einsprechen
+      </summary>
+      <div style={{ marginTop: 8 }}>
+        {MONOLOG_CHECKLISTE.map(([titel, punkte]) => (
+          <div key={titel} style={{ marginBottom: 10 }}>
+            <div style={{ fontSize: 12, fontWeight: 600, color: T.ink, marginBottom: 2 }}>{titel}</div>
+            <ul style={{ margin: 0, paddingLeft: 18, fontSize: 12, lineHeight: 1.5, color: T.muted }}>
+              {punkte.map(p => <li key={p}>{p}</li>)}
+            </ul>
+          </div>
+        ))}
+      </div>
+    </details>
+  );
+}
+
 function MonologPanel() {
   const mobile = useMobile();
   const [datum, setDatum] = React.useState(() => new Intl.DateTimeFormat('en-CA', { timeZone: 'Europe/Vienna' }).format(new Date()));
@@ -3377,6 +3437,7 @@ function MonologPanel() {
             onChange={e => setText(e.target.value)}
             style={{ width: '100%', fontFamily: T.sans, fontSize: 14, padding: '10px 12px', border: `1px solid ${T.border}`, borderRadius: 8, background: T.bg, color: T.ink, resize: 'vertical', opacity: laden ? 0.5 : 1 }} />
         </div>
+        <MonologCheckliste />
         <div style={{ display: 'flex', gap: 10, alignItems: 'center', flexWrap: 'wrap' }}>
           <button onClick={saeubern} disabled={!aktiv}
             style={{ fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 20px', borderRadius: 8, border: 'none', cursor: aktiv ? 'pointer' : 'not-allowed', background: aktiv ? T.accent : T.surfaceAlt, color: aktiv ? '#fff' : T.mutedSoft }}>
