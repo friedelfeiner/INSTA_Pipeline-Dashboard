@@ -3833,9 +3833,21 @@ function istPrioFaehigeKuerVariante(v) {
   return HITL2_PRIO_STILE.has(v.stil) && (typeof v.duration_sec !== 'number' || v.duration_sec <= 90);
 }
 
+// Der Token kommt nur über den ntfy-Link in die Adresse. Einmal gesehen, merkt ihn sich
+// der Browser — sonst scheitert die Prio-Wahl, sobald das Dashboard direkt (Lesezeichen,
+// Home-Bildschirm, Tab-Wechsel) statt über die Nachricht geöffnet wird.
+function hitlToken() {
+  const ausLink = new URLSearchParams(window.location.search).get('hitl_token') || '';
+  try {
+    if (ausLink) localStorage.setItem('hitlToken', ausLink);
+    return ausLink || localStorage.getItem('hitlToken') || '';
+  } catch { return ausLink; }
+}
+hitlToken();
+
 async function setzeHitl2Prio(etappeId, stil) {
-  const token = new URLSearchParams(window.location.search).get('hitl_token') || '';
-  if (!token) return { ok: false, error: 'Sicherer Kürraum-Link fehlt — bitte die ntfy-Nachricht erneut öffnen.' };
+  const token = hitlToken();
+  if (!token) return { ok: false, error: 'Sicherer Kürraum-Link fehlt — bitte das Dashboard einmal über die ntfy-Nachricht öffnen.' };
   const params = new URLSearchParams({ token, etappe: etappeId, action: 'prio', stil });
   try {
     const res = await fetch(`${FUNCTIONS_URL}/hitl-action?${params}`, {
@@ -3909,6 +3921,12 @@ function Hitl2Kuerraum({ etappe, onAenderung }) {
           <b style={{ color: T.warn }}>Kein Zieldatum gesetzt — wartet auf Freigabe oder Veto</b>
         )}
       </div>
+
+      {offen && !isPreview && !hitlToken() && (
+        <div style={{ background: T.errSoft, border: `1px solid ${T.err}`, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontFamily: T.sans, color: T.err, fontWeight: 600 }}>
+          Prio-Wahl hier noch nicht möglich — das Dashboard einmal über die ntfy-Nachricht öffnen. Veröffentlichen und Veto gehen trotzdem.
+        </div>
+      )}
 
       {varianten.length ? varianten.map(v => {
         const istGewaehlt = gewaehlt === v.stil;
