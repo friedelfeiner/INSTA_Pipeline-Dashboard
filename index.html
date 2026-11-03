@@ -4572,6 +4572,13 @@ function TabKostenGesamt() {
   const ohneTelemetrieSichtbar = ohneTelemetrieMonate.reduce((a, v) => a + v, 0);
   const lueckeGesamt = Math.max(0, grandEurGesamt - telemetrieGesamt);
 
+  // Master-Reise: Belege im Zeitfenster der letzten Reise, vorgerechnet in costs_report.py.
+  const master = kosten.master_reise;
+  const fmtTag = iso => `${iso.slice(8, 10)}.${iso.slice(5, 7)}.`;
+  const masterRows = master ? Object.entries(master.anbieter || {}).map(([name, usd]) => ({ name, color: providerColor(name), usd, eur: usd * kurs, sub: null })) : [];
+  const masterRowMax = Math.max(...masterRows.map(p => p.eur), 0.01);
+  const masterTagMax = master ? Math.max(...master.tage.map(t => t.eur), 0.01) : 0.01;
+
   return (
     <div style={{ flex: 1, overflow: 'auto', padding: mobile ? '14px 14px' : '24px 28px' }}>
       <div style={{ display: 'flex', flexDirection: 'column', gap: 22, maxWidth: 1080 }}>
@@ -4609,6 +4616,54 @@ function TabKostenGesamt() {
               Kosten/Call — sind entsprechend zu niedrig.
             </div>
           </div>
+        )}
+
+        {master && (
+          <Section label={`Master-Reise — ${master.name}`}>
+            <div style={{ background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 18 }}>
+              <div style={{ display: 'flex', flexWrap: 'wrap', gap: mobile ? 16 : 34, marginBottom: 18 }}>
+                <div>
+                  <div style={{ fontSize: 11, color: T.muted, marginBottom: 3 }}>Volle Etappe</div>
+                  <div style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 700, color: KB }}>{fmtEur(master.pro_volle_etappe.eur)}</div>
+                  <div style={{ fontSize: 10.5, color: T.mutedSoft, marginTop: 2 }}>Ø der {master.volle_etappen} voll gelaufenen Tage</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: T.muted, marginBottom: 3 }}>Ganze Reise</div>
+                  <div style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 700, color: T.ink }}>{fmtEur(master.eur)}</div>
+                  <div style={{ fontSize: 10.5, color: T.mutedSoft, marginTop: 2 }}>{master.etappen} Etappen · {fmtTag(master.von)}–{fmtTag(master.bis)} · Ø {fmtEur(master.pro_etappe.eur)}</div>
+                </div>
+                <div>
+                  <div style={{ fontSize: 11, color: T.muted, marginBottom: 3 }}>Alles andere</div>
+                  <div style={{ fontFamily: T.mono, fontSize: 20, fontWeight: 700, color: T.mutedSoft }}>{fmtEur(master.test.eur)}</div>
+                  <div style={{ fontSize: 10.5, color: T.mutedSoft, marginTop: 2 }}>Test und Entwicklung · ohne Pro-Abo</div>
+                </div>
+              </div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 14, marginBottom: 18 }}>
+                {masterRows.map(p => (
+                  <ProviderRow key={p.name} p={p} max={masterRowMax} fmtEur={fmtEur} track={KBTrack} />
+                ))}
+              </div>
+              {master.tage.map(t => {
+                const ausfall = master.teilausfall?.[t.tag];
+                return (
+                  <div key={t.tag} title={ausfall || undefined} style={{ display: 'flex', alignItems: 'center', gap: 12, padding: '4px 0' }}>
+                    <div style={{ width: 58, whiteSpace: 'nowrap', fontFamily: T.mono, fontSize: 11, color: T.muted }}>
+                      {fmtTag(t.tag)}{ausfall && <span style={{ color: T.warn }}> •</span>}
+                    </div>
+                    <div style={{ flex: 1, height: 10, background: KBTrack, borderRadius: 4, overflow: 'hidden' }}>
+                      <div style={{ height: '100%', width: `${t.eur / masterTagMax * 100}%`, background: ausfall ? T.warn : KB }} />
+                    </div>
+                    <div style={{ width: 62, textAlign: 'right', fontFamily: T.mono, fontSize: 11.5, fontWeight: 600, color: T.ink }}>{fmtEur(t.eur)}</div>
+                  </div>
+                );
+              })}
+              <div style={{ fontSize: 10.5, color: T.mutedSoft, marginTop: 10, lineHeight: 1.5 }}>
+                Abgerechnet laut Belegen im Zeitfenster der Reise, nach Kalendertag.
+                {Object.entries(master.teilausfall || {}).map(([tag, grund]) => <React.Fragment key={tag}> • {fmtTag(tag)}: {grund}.</React.Fragment>)}
+                {master.hinweis && <> {master.hinweis}</>}
+              </div>
+            </div>
+          </Section>
         )}
 
         <Section label="Beleg gegen Telemetrie">
