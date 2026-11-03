@@ -58,9 +58,9 @@
 <body>
 <div id="root"></div>
 
-<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" crossorigin="anonymous"></script>
-<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react@18.3.1/umd/react.development.js" integrity="sha384-hD6/rw4ppMLGNu3tX5cjIb+uRZ7UkRJ6BPkLpg4hAu/6onKUg4lLsHAs9EBPT82L" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/react-dom@18.3.1/umd/react-dom.development.js" integrity="sha384-u6aeetuaXnQ38mYT8rp6sbXaQe3NL9t+IBXmnYxwkUI2Hw4bsp2Wvmx4yRQF1uAm" crossorigin="anonymous"></script>
+<script src="https://unpkg.com/@babel/standalone@7.29.0/babel.min.js" integrity="sha384-m08KidiNqLdpJqLq95G/LEi8Qvjl/xUYll3QILypMoQ65QorJ9Lvtp2RXYGBFj1y" crossorigin="anonymous"></script>
 
 <script type="text/babel">
 const { useState } = React;
@@ -100,10 +100,10 @@ const T = {
 };
 
 // ─── Platform cost split ──────────────────────────────────────────────────────
-// Einheitspreise + Kurs kommen aus costs_data.json (tools/costs_report.py --json,
-// C1) — dieselbe Quelle, die der Ist-Kosten-Tab zeigt, damit Schätzwert und Beleg
-// nie mit unterschiedlichen Preisen rechnen. setKostenPreise() wird beim Laden von
-// costs_data.json aufgerufen; bis dahin bzw. falls das JSON fehlt, gelten die
+// Einheitspreise + Kurs kommen aus der Tabelle dashboard_daten (Aufruf `python3
+// tools/costs_report.py --json`, C1) — dieselbe Quelle, die der Ist-Kosten-Tab zeigt,
+// damit Schätzwert und Beleg nie mit unterschiedlichen Preisen rechnen. setKostenPreise()
+// wird beim Laden aufgerufen; bis dahin bzw. falls der Eintrag fehlt, gelten die
 // eingebauten Fallback-Werte (Stand 23.07., siehe pipeline_telemetry.PREISE_USD).
 const KOSTEN_PREISE_FALLBACK = {
   kurs: 0.8765,
@@ -149,14 +149,154 @@ const SUPABASE_URL = 'https://rgwbmqlcxxrynufcmwqx.supabase.co';
 const SUPABASE_KEY = 'sb_publishable_F-ZIctvp3JyhpVGNXbMttw_9vc7tdtH';
 const FUNCTIONS_URL = SUPABASE_URL + '/functions/v1';
 
+// ─── Sitzung ──────────────────────────────────────────────────────────────────
+// Ein Benutzer, E-Mail und Passwort. SUPABASE_KEY geht nur noch als apikey raus,
+// als Authorization ausschließlich das Login-Token. Direktes fetch nur in den
+// Anmelde-Hilfen hier; alle Daten- und Function-Aufrufe laufen über sbFetch.
+const SITZUNG_KEY = 'ft_sitzung';
+const SITZUNG_ENDE_EVENT = 'ft-sitzung-beendet';
+const ERNEUERN_VORLAUF_S = 60;
+const AUTH_URL = SUPABASE_URL + '/auth/v1';
+
+// Nur falls localStorage nicht schreibt (privater Modus): Sitzung bis zum Neuladen im Speicher.
+let sitzungFluechtig = null;
+
+function ladeSitzung() {
+  if (sitzungFluechtig) return sitzungFluechtig;
+  try {
+    const s = JSON.parse(localStorage.getItem(SITZUNG_KEY) || 'null');
+    return s?.access_token && s?.refresh_token ? s : null;
+  } catch { return null; }
+}
+
+function speichereSitzung(d) {
+  const s = {
+    access_token: d.access_token,
+    refresh_token: d.refresh_token,
+    expires_at: d.expires_at || Math.floor(Date.now() / 1000) + (d.expires_in || 3600),
+  };
+  try {
+    localStorage.setItem(SITZUNG_KEY, JSON.stringify(s));
+    sitzungFluechtig = null;
+  } catch { sitzungFluechtig = s; }
+  return s;
+}
+
+function beendeSitzung() {
+  sitzungFluechtig = null;
+  try { localStorage.removeItem(SITZUNG_KEY); } catch {}
+  window.dispatchEvent(new Event(SITZUNG_ENDE_EVENT));
+}
+
+// Gibt { ok: true } oder { ok: false, fehler } zurück und wirft nie.
+async function anmelden(email, password) {
+  let res;
+  try {
+    res = await fetch(`${AUTH_URL}/token?grant_type=password`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email, password }),
+    });
+  } catch {
+    return { ok: false, fehler: 'Keine Verbindung zum Server. Bitte das Netzwerk prüfen und erneut versuchen.' };
+  }
+  if (res.status === 400 || res.status === 401) return { ok: false, fehler: 'E-Mail oder Passwort stimmt nicht.' };
+  if (res.status === 429) return { ok: false, fehler: 'Zu viele Versuche. Bitte einen Moment warten.' };
+  if (!res.ok) return { ok: false, fehler: `Anmeldung gerade nicht möglich (HTTP ${res.status}).` };
+  const d = await res.json().catch(() => null);
+  if (!d?.access_token || !d?.refresh_token) return { ok: false, fehler: 'Unerwartete Antwort vom Server. Bitte erneut versuchen.' };
+  speichereSitzung(d);
+  return { ok: true };
+}
+
+// Parallele Aufrufe teilen sich eine Erneuerung. Ergebnis: neue Sitzung oder null,
+// wenn sie endgültig ungültig ist (dann ist sie schon beendet). Wirft bei Netz- oder
+// Serverstörung; die Sitzung bleibt dann erhalten, ein Funkloch meldet nicht ab.
+let laufendeErneuerung = null;
+function erneuereSitzung() {
+  if (laufendeErneuerung) return laufendeErneuerung;
+  laufendeErneuerung = (async () => {
+    const alt = ladeSitzung();
+    if (!alt) return null;
+    const res = await fetch(`${AUTH_URL}/token?grant_type=refresh_token`, {
+      method: 'POST',
+      headers: { apikey: SUPABASE_KEY, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ refresh_token: alt.refresh_token }),
+    });
+    const jetzt = ladeSitzung();
+    if (!jetzt) return null; // währenddessen abgemeldet: nichts wiederherstellen
+    if (res.ok) {
+      const d = await res.json();
+      if (!d?.access_token || !d?.refresh_token) throw new Error('Erneuern: unerwartete Antwort');
+      return speichereSitzung(d);
+    }
+    if (res.status === 400 || res.status === 401 || res.status === 403) {
+      // Ein anderer Tab hat schon erneuert: unser Refresh-Token ist alt, die Sitzung nicht.
+      if (jetzt.refresh_token !== alt.refresh_token) return jetzt;
+      beendeSitzung();
+      return null;
+    }
+    throw new Error(`Erneuern: HTTP ${res.status}`);
+  })().finally(() => { laufendeErneuerung = null; });
+  return laufendeErneuerung;
+}
+
+// Wie fetch, aber angemeldet. Antwortet immer mit einer Response wie fetch (wirft nur
+// bei Netzfehler), damit die vorhandenen res.ok-Zweige weiter greifen.
+async function sbFetch(url, opts = {}) {
+  const senden = s => {
+    const headers = new Headers(opts.headers);
+    headers.set('apikey', SUPABASE_KEY);
+    headers.set('Authorization', `Bearer ${s.access_token}`);
+    return fetch(url, { ...opts, headers });
+  };
+  const nichtAngemeldet = () => new Response(JSON.stringify({ error: 'Nicht angemeldet' }),
+    { status: 401, headers: { 'Content-Type': 'application/json' } });
+
+  let s = ladeSitzung();
+  if (!s) { beendeSitzung(); return nichtAngemeldet(); }
+  if (s.expires_at - Date.now() / 1000 < ERNEUERN_VORLAUF_S) {
+    // Bei Störung den bisherigen Token versuchen, der Server entscheidet dann.
+    const bisher = s;
+    s = await erneuereSitzung().catch(() => bisher);
+    if (!s) return nichtAngemeldet();
+  }
+
+  const res = await senden(s);
+  if (res.status !== 401) return res;
+
+  // Einmal erneuern und wiederholen. Hat ein paralleler Aufruf schon erneuert,
+  // reicht dessen Token und es braucht keine zweite Erneuerung.
+  const aktuell = ladeSitzung();
+  let neu = aktuell;
+  if (!aktuell || aktuell.access_token === s.access_token) {
+    try { neu = await erneuereSitzung(); } catch { return res; }
+  }
+  if (!neu) return res;
+  const zweite = await senden(neu);
+  if (zweite.status === 401 && ladeSitzung()?.access_token === neu.access_token) beendeSitzung();
+  return zweite;
+}
+
+function abmelden() {
+  const s = ladeSitzung();
+  beendeSitzung();
+  // Refresh-Token auch serverseitig entwerten; scheitert das, bleibt die lokale Abmeldung.
+  if (s) fetch(`${AUTH_URL}/logout?scope=local`, {
+    method: 'POST',
+    headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${s.access_token}` },
+    keepalive: true,
+  }).catch(() => {});
+}
+// ─── Ende Sitzung ─────────────────────────────────────────────────────────────
+
 // PostgREST liefert maximal 1000 Zeilen pro Anfrage (ein &limit=3000 wird
 // stillschweigend gekappt). Deshalb seitenweise über Range-Header holen.
 async function fetchAll(path, pageSize = 1000) {
-  const headers = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
   const out = [];
   for (let from = 0; ; from += pageSize) {
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/${path}`, {
-      headers: { ...headers, Range: `${from}-${from + pageSize - 1}` },
+    const res = await sbFetch(`${SUPABASE_URL}/rest/v1/${path}`, {
+      headers: { Range: `${from}-${from + pageSize - 1}` },
     });
     if (!res.ok) throw new Error(`Supabase ${res.status}: ${await res.text()}`);
     const page = await res.json();
@@ -192,7 +332,7 @@ async function fetchAccountInsights() {
 
 async function fetchLatestRun() {
   const url = `${SUPABASE_URL}/rest/v1/pipeline_steps?order=ts.desc&limit=1&select=etappe_id,ts`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  const res = await sbFetch(url);
   if (!res.ok) return null;
   const rows = await res.json();
   return rows.length ? rows[0].etappe_id : null;
@@ -200,7 +340,7 @@ async function fetchLatestRun() {
 
 async function fetchSteps(etappeId) {
   const url = `${SUPABASE_URL}/rest/v1/pipeline_steps?etappe_id=eq.${etappeId}&order=ts.asc`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  const res = await sbFetch(url);
   if (!res.ok) return [];
   return res.json();
 }
@@ -211,14 +351,14 @@ async function fetchSteps(etappeId) {
 async function fetchPublishQueue(etappeId) {
   const cols = 'etappe_id,slot,variante_stil,due_at,status,posted_at,ig_permalink,fehler_kurz';
   const url = `${SUPABASE_URL}/rest/v1/publish_queue_oeffentlich?etappe_id=eq.${etappeId}&select=${cols}&order=slot.asc`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  const res = await sbFetch(url);
   if (!res.ok) return [];
   return res.json();
 }
 
 async function fetchRouten() {
   const url = `${SUPABASE_URL}/rest/v1/routen?select=id,name,kuerzel`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  const res = await sbFetch(url);
   if (!res.ok) return {};
   const rows = await res.json();
   return Object.fromEntries(rows.map(r => [
@@ -247,9 +387,9 @@ async function fetchReelMetrics() {
 async function sendMonolog(datum, text, nurText) {
   let r;
   try {
-    r = await fetch(FUNCTIONS_URL + '/monolog-grundgeruest', {
+    r = await sbFetch(FUNCTIONS_URL + '/monolog-grundgeruest', {
       method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ datum, monolog_text: text, nur_text: !!nurText }),
     });
   } catch (err) {
@@ -268,7 +408,7 @@ async function sendMonolog(datum, text, nurText) {
 // Vorhandenen Monolog für ein Datum laden (run=1, wie die Edge Function ihn ablegt).
 async function fetchMonolog(datum) {
   const url = `${SUPABASE_URL}/rest/v1/etappen?datum=eq.${datum}&run=eq.1&select=tages_monolog&limit=1`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY } });
+  const res = await sbFetch(url);
   if (!res.ok) return '';
   const rows = await res.json();
   return rows[0]?.tages_monolog || '';
@@ -277,16 +417,15 @@ async function fetchMonolog(datum) {
 // Liste aller bereits eingesprochenen Monologe (neueste zuerst), inkl. Route via Embed.
 async function fetchMonologListe() {
   const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=id,datum,etappen_nr,tag_nr,tagesueberschrift,tages_monolog,route:routen(name,kuerzel)&tages_monolog=not.is.null&order=datum.desc&limit=30`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY } });
+  const res = await sbFetch(url);
   if (!res.ok) return [];
   return res.json();
 }
 
 async function patchEtappe(id, fields) {
-  return fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${id}`, {
+  return sbFetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${id}`, {
     method: 'PATCH',
-    headers: { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY,
-      'Content-Type': 'application/json', Prefer: 'return=minimal' },
+    headers: { 'Content-Type': 'application/json', Prefer: 'return=minimal' },
     body: JSON.stringify(fields),
   });
 }
@@ -1070,8 +1209,8 @@ function baueRunAbschluss(etappe, queueRows) {
       renderLabel:  gerendert ? 'Gerendert' : 'Nicht erfasst',
       // Ablagezeit gibt es in unseren Daten nicht (Block B4) — der Entwurf zeigt
       // dort „Dropbox · abgelegt 20:44", wir sagen ausdrücklich, dass die Zeit fehlt.
-      ablage: istGueltigeHttpsUrl(v.ftp_url) ? 'Ablage · Zeitpunkt nicht erfasst' : 'Ablage nicht erfasst',
-      vorschauUrl: istGueltigeHttpsUrl(v.ftp_url) ? v.ftp_url : null,
+      ablage: istReelUploadUrl(v.ftp_url) ? 'Ablage · Zeitpunkt nicht erfasst' : 'Ablage nicht erfasst',
+      vorschauUrl: istReelUploadUrl(v.ftp_url) ? v.ftp_url : null,
       zeilen,
       gesamtStatus: abGesamtStatus(zeilen),
     };
@@ -2652,14 +2791,13 @@ function TabStyleReview({ data, selectedEtappe, onOpenStil }) {
   React.useEffect(() => {
     if (!curE?.id) return;
     setLoading(true); setFotos([]); setStilInfo(null);
-    const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
-    fetch(`${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${curE.id}&bildgen_url=not.is.null&select=foto_nr,bildgen_url,tagesstil&order=foto_nr.asc`, { headers: h })
+    sbFetch(`${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${curE.id}&bildgen_url=not.is.null&select=foto_nr,bildgen_url,tagesstil&order=foto_nr.asc`)
       .then(r => r.json())
       .then(f => {
         setFotos(f);
         const tagesstil = f.length > 0 ? f[0].tagesstil : null;
         if (tagesstil) {
-          fetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}&select=name,bewertung,aktiv,forciert,mal_benutzt&limit=1`, { headers: h })
+          sbFetch(`${SUPABASE_URL}/rest/v1/stile?name=eq.${encodeURIComponent(tagesstil)}&select=name,bewertung,aktiv,forciert,mal_benutzt&limit=1`)
             .then(r => r.json()).then(rows => setStilInfo(rows[0] || null));
         }
       }).finally(() => setLoading(false));
@@ -2815,9 +2953,8 @@ function TabStilKatalog({ fokus, onFokusDone } = {}) {
 
   React.useEffect(() => {
     if (_skCache) return;
-    const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` };
     Promise.all([
-      fetch(`${SUPABASE_URL}/rest/v1/stile?select=*&order=name`, { headers: h }).then(r => r.json()),
+      sbFetch(`${SUPABASE_URL}/rest/v1/stile?select=*&order=name`).then(r => r.json()),
       fetchAll('fotos?select=tagesstil,bildgen_url,foto_nr&bildgen_url=not.is.null&order=foto_nr'),
     ]).then(([stileRows, urlRows]) => {
       const imgs = {};
@@ -2842,8 +2979,8 @@ function TabStilKatalog({ fokus, onFokusDone } = {}) {
   }, []);
 
   const skPatch = React.useCallback(async (id, body) => {
-    const h = { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}`, 'Content-Type': 'application/json', 'Prefer': 'return=minimal' };
-    const res = await fetch(`${SUPABASE_URL}/rest/v1/stile?id=eq.${id}`, { method: 'PATCH', headers: h, body: JSON.stringify(body) });
+    const h = { 'Content-Type': 'application/json', 'Prefer': 'return=minimal' };
+    const res = await sbFetch(`${SUPABASE_URL}/rest/v1/stile?id=eq.${id}`, { method: 'PATCH', headers: h, body: JSON.stringify(body) });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
   }, []);
 
@@ -3391,8 +3528,8 @@ function MonologPanel() {
       if (!save.ok || !save.etappe_id) { setStatus('Fehler beim Speichern: ' + (save.error || 'unbekannt')); return; }
       // 2. Als final + freigegeben markieren. return=representation + Status-Check, damit ein
       //    fehlgeschlagener PATCH nicht mehr still verschluckt wird.
-      const h = { apikey: SUPABASE_KEY, Authorization: 'Bearer ' + SUPABASE_KEY, 'Content-Type': 'application/json', Prefer: 'return=representation' };
-      const patch = await fetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${save.etappe_id}`, {
+      const h = { 'Content-Type': 'application/json', Prefer: 'return=representation' };
+      const patch = await sbFetch(`${SUPABASE_URL}/rest/v1/etappen?id=eq.${save.etappe_id}`, {
         method: 'PATCH', headers: h,
         body: JSON.stringify({
           monolog_final: text.trim(),
@@ -3496,7 +3633,7 @@ function MonologPanel() {
 async function fetchEtappenFuerHitl1() {
   const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,startort,zielort,reel_varianten,hitl_prio_stil,hitl1_benachrichtigt_um,hitl1_entschieden_um';
   const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=${cols}&hitl1_benachrichtigt_um=not.is.null&hitl1_entschieden_um=is.null&order=datum.desc&limit=10`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  const res = await sbFetch(url);
   if (!res.ok) return [];
   return res.json();
 }
@@ -3507,14 +3644,14 @@ async function fetchEtappenHistorie() {
   const cols = 'id,datum,etappen_nr,tag_nr,tagesueberschrift,reel_varianten,hitl_prio_stil,'
     + 'hitl1_entschieden_um,route:routen(name,kuerzel)';
   const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=${cols}&reel_varianten=not.is.null&order=datum.desc&limit=30`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  const res = await sbFetch(url);
   if (!res.ok) return [];
   return res.json();
 }
 
 async function fetchFotosForEtappe(etappeId) {
   const url = `${SUPABASE_URL}/rest/v1/fotos?etappe_id=eq.${etappeId}&select=foto_nr,bildgen_datei,story_text&order=aufnahmedatum.asc`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  const res = await sbFetch(url);
   if (!res.ok) return [];
   return res.json();
 }
@@ -3809,7 +3946,7 @@ function TabHitl1() {
 async function fetchEtappenFuerHitl2() {
   const cols = 'id,datum,etappen_nr,tag_nr,pipeline_status,post_geplant_um,veto,freigabe,reel_varianten,hitl_prio_stil,hitl2_prio_stil';
   const url = `${SUPABASE_URL}/rest/v1/etappen_aktuell?select=${cols}&pipeline_status=eq.reel_freigabe&order=datum.desc&limit=10`;
-  const res = await fetch(url, { headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` } });
+  const res = await sbFetch(url);
   if (!res.ok) return [];
   return res.json();
 }
@@ -3822,10 +3959,15 @@ function istGueltigeHttpsUrl(wert) {
   catch { return false; }
 }
 
+// Reel-Dateien liegen nur auf unserem Upload-Server, alles andere wird nicht verlinkt.
+function istReelUploadUrl(wert) {
+  return typeof wert === 'string' && wert.startsWith('https://uploads.thefloppytrail.com/');
+}
+
 function kuerVarianten(reelVarianten) {
   return parseReelVarianten(reelVarianten).filter(v =>
     v && typeof v.stil === 'string' && typeof v.reel_datei === 'string' && v.reel_datei.trim()
-      && istGueltigeHttpsUrl(v.ftp_url)
+      && istReelUploadUrl(v.ftp_url)
   );
 }
 
@@ -3833,27 +3975,22 @@ function istPrioFaehigeKuerVariante(v) {
   return HITL2_PRIO_STILE.has(v.stil) && (typeof v.duration_sec !== 'number' || v.duration_sec <= 90);
 }
 
-// Der Token kommt nur über den ntfy-Link in die Adresse. Einmal gesehen, merkt ihn sich
-// der Browser — sonst scheitert die Prio-Wahl, sobald das Dashboard direkt (Lesezeichen,
-// Home-Bildschirm, Tab-Wechsel) statt über die Nachricht geöffnet wird.
-function hitlToken() {
-  const ausLink = new URLSearchParams(window.location.search).get('hitl_token') || '';
-  try {
-    if (ausLink) localStorage.setItem('hitlToken', ausLink);
-    return ausLink || localStorage.getItem('hitlToken') || '';
-  } catch { return ausLink; }
-}
-hitlToken();
+// Die Prio-Wahl läuft über den Login. Der frühere HITL-Token wird nicht mehr gebraucht:
+// gemerkten Wert löschen und aus der Adresszeile nehmen (übrige Parameter bleiben).
+try { localStorage.removeItem('hitlToken'); } catch {}
+try {
+  const adresse = new URLSearchParams(window.location.search);
+  if (adresse.has('hitl_token')) {
+    adresse.delete('hitl_token');
+    const rest = adresse.toString();
+    history.replaceState(null, '', window.location.pathname + (rest ? `?${rest}` : '') + window.location.hash);
+  }
+} catch {}
 
 async function setzeHitl2Prio(etappeId, stil) {
-  const token = hitlToken();
-  if (!token) return { ok: false, error: 'Sicherer Kürraum-Link fehlt — bitte das Dashboard einmal über die ntfy-Nachricht öffnen.' };
-  const params = new URLSearchParams({ token, etappe: etappeId, action: 'prio', stil });
+  const params = new URLSearchParams({ etappe: etappeId, action: 'prio', stil });
   try {
-    const res = await fetch(`${FUNCTIONS_URL}/hitl-action?${params}`, {
-      method: 'POST',
-      headers: { apikey: SUPABASE_KEY, Authorization: `Bearer ${SUPABASE_KEY}` },
-    });
+    const res = await sbFetch(`${FUNCTIONS_URL}/hitl-action?${params}`, { method: 'POST' });
     const text = await res.text();
     return { ok: res.ok, error: res.ok ? null : (text || `HTTP ${res.status}`) };
   } catch (err) {
@@ -3922,12 +4059,6 @@ function Hitl2Kuerraum({ etappe, onAenderung }) {
         )}
       </div>
 
-      {offen && !isPreview && !hitlToken() && (
-        <div style={{ background: T.errSoft, border: `1px solid ${T.err}`, borderRadius: 8, padding: '10px 14px', marginBottom: 14, fontSize: 13, fontFamily: T.sans, color: T.err, fontWeight: 600 }}>
-          Prio-Wahl hier noch nicht möglich — das Dashboard einmal über die ntfy-Nachricht öffnen. Veröffentlichen und Veto gehen trotzdem.
-        </div>
-      )}
-
       {varianten.length ? varianten.map(v => {
         const istGewaehlt = gewaehlt === v.stil;
         const istPrioFaehig = istPrioFaehigeKuerVariante(v);
@@ -3938,10 +4069,12 @@ function Hitl2Kuerraum({ etappe, onAenderung }) {
                 <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.ink }}>{v.stil}</div>
                 <div style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, marginTop: 3 }}>Dauer: {fmtDur(v.duration_sec)}</div>
               </div>
-              <a href={v.ftp_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
-                style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '7px 11px', borderRadius: 7, border: `1px solid ${T.border}`, color: T.accentInk, background: T.surface, textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                Vorschau öffnen ↗
-              </a>
+              {istReelUploadUrl(v.ftp_url) && (
+                <a href={v.ftp_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+                  style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '7px 11px', borderRadius: 7, border: `1px solid ${T.border}`, color: T.accentInk, background: T.surface, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                  Vorschau öffnen ↗
+                </a>
+              )}
               {istPrioFaehig ? (
                 <button onClick={() => setzePrio(v.stil)} disabled={saving || !offen || isPreview}
                   style={{ fontFamily: T.sans, fontSize: 12, fontWeight: istGewaehlt ? 700 : 600, padding: '7px 11px', borderRadius: 7, border: `1.5px solid ${istGewaehlt ? T.accent : T.border}`, cursor: (saving || !offen || isPreview) ? 'not-allowed' : 'pointer', background: istGewaehlt ? T.accent : T.surface, color: istGewaehlt ? '#fff' : T.muted, whiteSpace: 'nowrap' }}>
@@ -4049,10 +4182,12 @@ function Hitl2KuerraumSimulation() {
                 <div style={{ fontFamily: T.sans, fontSize: 13, fontWeight: 700, color: T.ink }}>{v.stil}</div>
                 <div style={{ fontFamily: T.mono, fontSize: 11, color: T.muted, marginTop: 3 }}>Dauer: {fmtDur(v.duration_sec)}</div>
               </div>
-              <a href={v.ftp_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
-                style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '7px 11px', borderRadius: 7, border: `1px solid ${T.border}`, color: T.accentInk, background: T.surface, textDecoration: 'none', whiteSpace: 'nowrap' }}>
-                Vorschau öffnen ↗
-              </a>
+              {istReelUploadUrl(v.ftp_url) && (
+                <a href={v.ftp_url} target="_blank" rel="noopener noreferrer" referrerPolicy="no-referrer"
+                  style={{ fontFamily: T.sans, fontSize: 12, fontWeight: 600, padding: '7px 11px', borderRadius: 7, border: `1px solid ${T.border}`, color: T.accentInk, background: T.surface, textDecoration: 'none', whiteSpace: 'nowrap' }}>
+                  Vorschau öffnen ↗
+                </a>
+              )}
               {istPrioFaehig ? (
                 <button onClick={() => waehlePrio(v.stil)}
                   style={{ fontFamily: T.sans, fontSize: 12, fontWeight: istGewaehlt ? 700 : 600, padding: '7px 11px', borderRadius: 7, border: `1.5px solid ${istGewaehlt ? T.accent : T.border}`, cursor: 'pointer', background: istGewaehlt ? T.accent : T.surface, color: istGewaehlt ? '#fff' : T.muted, whiteSpace: 'nowrap' }}>
@@ -4376,10 +4511,10 @@ function TabReels({ data, selectedEtappe }) {
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 // ─── Ist-Kosten Gesamtprojekt ──────────────────────────────────────────────
-// Quelle: costs_data.json im Repo-Root, erzeugt von `python3 tools/costs_report.py --json`
+// Quelle: Tabelle dashboard_daten, Aufruf `python3 tools/costs_report.py --json`,
 // aus den Anbieter-Exports unter costs/<anbieter>/. Hier wird nur gezeichnet, nicht
 // gerechnet — sonst könnten Report und Dashboard unterschiedliche Zahlen zeigen.
-// Monatsritual: neue CSVs droppen → Report mit --json laufen lassen → committen.
+// Monatsritual: neue CSVs droppen → Report mit --json laufen lassen.
 const KOSTEN_PROVIDER_COLOR = { anthropic: '#C15F3C', atlas: '#3B6EA5', fal: '#7A5CC7', minimax: '#C2478A', sunoapi: '#D6A419', wavespeed: '#4C9A5B', google: '#1AA6B7', bfl: '#55606E' };
 const KOSTEN_PROVIDER_LABEL = { anthropic: 'Anthropic', atlas: 'Atlas', fal: 'fal', minimax: 'MiniMax', sunoapi: 'Suno-API', wavespeed: 'WaveSpeed', google: 'Google', bfl: 'Black Forest Labs' };
 const providerLabel = p => KOSTEN_PROVIDER_LABEL[p] || p;
@@ -4428,6 +4563,14 @@ async function fetchTelemetrieKosten() {
   return { kosten, ohne, ohneGesamt, ohnePubliziert };
 }
 
+// Liefert die Kostendaten oder null, wenn der Eintrag fehlt.
+async function fetchKostenDaten() {
+  const res = await sbFetch(`${SUPABASE_URL}/rest/v1/dashboard_daten?schluessel=eq.kosten&select=daten`, { cache: 'no-store' });
+  if (!res.ok) throw new Error(`Tabelle dashboard_daten — HTTP ${res.status}`);
+  const rows = await res.json();
+  return rows[0]?.daten ?? null;
+}
+
 function TabKostenGesamt() {
   const mobile = useMobile();
   const [kosten, setKosten] = React.useState(null);
@@ -4435,9 +4578,8 @@ function TabKostenGesamt() {
   const [fehler, setFehler] = React.useState(null);
 
   React.useEffect(() => {
-    fetch('costs_data.json', { cache: 'no-store' })
-      .then(r => { if (!r.ok) throw new Error(`costs_data.json — HTTP ${r.status}`); return r.json(); })
-      .then(setKosten)
+    fetchKostenDaten()
+      .then(d => { if (!d) throw new Error('Tabelle dashboard_daten — Eintrag „kosten“ fehlt'); setKosten(d); })
       .catch(e => setFehler(String(e.message || e)));
     fetchTelemetrieKosten().then(setTelemetrie).catch(() => setTelemetrie({ kosten: {}, ohne: {}, ohneGesamt: 0, ohnePubliziert: 0 }));
   }, []);
@@ -4458,7 +4600,7 @@ function TabKostenGesamt() {
         <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.6 }}>
           {fehler}<br />
           Im Pipeline-Repo <span style={{ fontFamily: T.mono, fontSize: 12 }}>python3 tools/costs_report.py --json</span> laufen lassen —
-          das schreibt <span style={{ fontFamily: T.mono, fontSize: 12 }}>costs_data.json</span> hierher.
+          das schreibt in die Tabelle <span style={{ fontFamily: T.mono, fontSize: 12 }}>dashboard_daten</span>.
         </div>
       </Panel>
     </div>
@@ -4481,7 +4623,8 @@ function TabKostenGesamt() {
       <Panel style={{ padding: 20, maxWidth: 620 }}>
         <div style={{ fontSize: 14, fontWeight: 600, color: T.ink, marginBottom: 8 }}>Noch keine Kostendaten</div>
         <div style={{ fontSize: 13, color: T.muted, lineHeight: 1.6 }}>
-          <span style={{ fontFamily: T.mono, fontSize: 12 }}>costs_data.json</span> enthält keine Monate.
+          Tabelle <span style={{ fontFamily: T.mono, fontSize: 12 }}>dashboard_daten</span> enthält keine Monate.
+          Aufruf: <span style={{ fontFamily: T.mono, fontSize: 12 }}>python3 tools/costs_report.py --json</span>
         </div>
       </Panel>
     </div>
@@ -4908,6 +5051,15 @@ const PIPELINE_TABS = [
   { id: 'liverun', label: 'Live Run',Icon: IActivity,  Content: null },
 ];
 
+function AbmeldenKnopf() {
+  return (
+    <button onClick={abmelden}
+      style={{ fontFamily: T.sans, fontSize: 11, color: T.mutedSoft, background: 'none', border: 'none', cursor: 'pointer', padding: '4px 2px', whiteSpace: 'nowrap' }}>
+      Abmelden
+    </button>
+  );
+}
+
 function App() {
   const mobile = useMobile();
   const [tab, setTab]         = useState('uebersicht');
@@ -4929,11 +5081,10 @@ function App() {
   const [routeDropdownOpen, setRouteDropdownOpen] = useState(false);
 
   React.useEffect(() => {
-    // costs_data.json zuerst (best effort) — setKostenPreise() muss laufen, bevor
+    // Kostendaten zuerst (best effort) — setKostenPreise() muss laufen, bevor
     // transformData() platformCosts() aufruft, sonst rechnet der erste Render mit
     // dem eingebauten Fallback statt den aktuellen Preisen aus dem Beleg (C1/C2).
-    fetch('costs_data.json', { cache: 'no-store' })
-      .then(r => r.ok ? r.json() : null)
+    fetchKostenDaten()
       .then(j => setKostenPreise(j?.meta))
       .catch(() => {})
       .then(() => Promise.all([fetchEtappen(), fetchRouten()]))
@@ -5038,8 +5189,9 @@ function App() {
     </div>
   );
   if (loadError || !data) return (
-    <div style={{ display:'flex', alignItems:'center', justifyContent:'center', height:'100vh', fontFamily: T.sans, color: T.err, fontSize: 14 }}>
+    <div style={{ display:'flex', flexDirection:'column', gap: 12, alignItems:'center', justifyContent:'center', height:'100vh', fontFamily: T.sans, color: T.err, fontSize: 14 }}>
       Fehler: {loadError || 'Keine Etappen gefunden'}
+      <AbmeldenKnopf />
     </div>
   );
 
@@ -5146,6 +5298,7 @@ function App() {
               </button>
             )}
             {!mobile && mode === 'archiv' && navArrows}
+            <AbmeldenKnopf />
           </div>
         </div>
 
@@ -5374,7 +5527,71 @@ class ErrorBoundary extends React.Component {
   }
 }
 
-ReactDOM.createRoot(document.getElementById('root')).render(<ErrorBoundary><App /></ErrorBoundary>);
+// ─── Anmeldung ────────────────────────────────────────────────────────────────
+// Die Felder bleiben ungesteuert und werden beim Absenden aus dem Formular gelesen:
+// So zählt auch ein Wert, den 1Password einträgt, ohne ein Eingabe-Ereignis auszulösen.
+function LoginMaske({ onAngemeldet }) {
+  const [sendet, setSendet] = useState(false);
+  const [fehler, setFehler] = useState(null);
+
+  async function absenden(e) {
+    e.preventDefault();
+    if (sendet) return;
+    const felder = new FormData(e.currentTarget);
+    setSendet(true); setFehler(null);
+    const r = await anmelden(String(felder.get('email') || '').trim(), String(felder.get('password') || ''));
+    if (r.ok) { onAngemeldet(); return; }
+    setFehler(r.fehler);
+    setSendet(false);
+  }
+
+  const labelStil = { display: 'block', fontSize: 12, fontWeight: 600, color: T.muted, marginBottom: 5 };
+  // 16 px: Darunter zoomt iOS beim Antippen ins Feld.
+  const feldStil = { width: '100%', fontFamily: T.sans, fontSize: 16, color: T.ink, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 8, padding: '10px 12px', outlineColor: T.accent };
+
+  return (
+    <div style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', overflow: 'auto', padding: 20, background: T.bg, color: T.ink, fontFamily: T.sans }}>
+      <form onSubmit={absenden} method="post" style={{ width: '100%', maxWidth: 360, background: T.surface, border: `1px solid ${T.border}`, borderRadius: 12, padding: 24 }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 20 }}>
+          <div style={{ width: 30, height: 30, flexShrink: 0, borderRadius: 9, background: `linear-gradient(135deg, ${T.accent}, ${T.accentDeep})`, color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+            <ISparkles size={15} sw={2} />
+          </div>
+          <div style={{ fontFamily: T.serif, fontSize: 24, lineHeight: 1 }}>Floppy Trail</div>
+        </div>
+        <label htmlFor="login-email" style={labelStil}>E-Mail</label>
+        <input id="login-email" name="email" type="email" autoComplete="username" autoCapitalize="none" autoCorrect="off" spellCheck={false} required
+          style={{ ...feldStil, marginBottom: 14 }} />
+        <label htmlFor="login-passwort" style={labelStil}>Passwort</label>
+        <input id="login-passwort" name="password" type="password" autoComplete="current-password" required
+          style={{ ...feldStil, marginBottom: 18 }} />
+        {fehler && (
+          <div role="alert" style={{ background: T.errSoft, border: `1px solid ${T.err}`, borderRadius: 8, padding: '10px 12px', marginBottom: 14, fontSize: 13, color: T.err, fontWeight: 600 }}>
+            {fehler}
+          </div>
+        )}
+        <button type="submit" disabled={sendet}
+          style={{ width: '100%', fontFamily: T.sans, fontSize: 14, fontWeight: 600, padding: '10px 16px', borderRadius: 8, border: 'none', cursor: sendet ? 'not-allowed' : 'pointer', background: sendet ? T.surfaceAlt : T.accent, color: sendet ? T.mutedSoft : '#fff' }}>
+          {sendet ? 'Anmelden …' : 'Anmelden'}
+        </button>
+      </form>
+    </div>
+  );
+}
+
+// Ohne Sitzung wird App gar nicht erst gestartet, also läuft auch keine Abfrage.
+// Die Adresse bleibt beim Anmelden unberührt, Direkt-Links wie ?ansicht=hitl2 gelten weiter.
+function LoginGate({ children }) {
+  const [angemeldet, setAngemeldet] = useState(() => !!ladeSitzung());
+  React.useEffect(() => {
+    const fn = () => setAngemeldet(false);
+    window.addEventListener(SITZUNG_ENDE_EVENT, fn);
+    return () => window.removeEventListener(SITZUNG_ENDE_EVENT, fn);
+  }, []);
+  if (!angemeldet) return <LoginMaske onAngemeldet={() => setAngemeldet(true)} />;
+  return children;
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<LoginGate><ErrorBoundary><App /></ErrorBoundary></LoginGate>);
 </script>
 </body>
 </html>
